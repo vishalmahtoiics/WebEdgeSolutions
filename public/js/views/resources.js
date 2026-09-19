@@ -1,4 +1,4 @@
-import { api, el, emptyState, formatMb, initials, toast } from '../core.js';
+import { api, el, clear, emptyState, formatMb, initials } from '../core.js';
 import { resourceModal } from './users.js';
 
 /// Super Admin sees every user's allocation and can edit it; a normal user sees
@@ -6,7 +6,7 @@ import { resourceModal } from './users.js';
 export async function renderResources({ user }) {
   if (user.role !== 'SUPER_ADMIN') return myResources();
 
-  const { users } = await api('/users');
+  const [{ users }, { providers }] = await Promise.all([api('/users'), api('/providers')]);
   const frag = el('div');
 
   frag.append(
@@ -78,7 +78,101 @@ export async function renderResources({ user }) {
     ),
   );
 
+  // Read-only inventory from each connected provider, shown beneath the manual
+  // allocations so it is obvious which numbers are assigned and which are real.
+  providers
+    .filter((p) => p.isActive && p.capabilities?.servers)
+    .forEach((p) => frag.append(providerServersCard(p)));
+
   return frag;
+}
+
+/// Lists a provider's servers, loading them after render so a slow or
+/// unavailable provider never blocks the page.
+function providerServersCard(provider) {
+  const body = el('div', { class: 'card-body' }, el('div', { class: 'muted small' }, 'Loading…'));
+
+  api(`/providers/${provider.id}/servers`)
+    .then(({ supported, servers, error }) => {
+      clear(body);
+
+      if (!supported) {
+        return body.append(
+          el('div', { class: 'muted small' }, 'This provider does not expose server information.'),
+        );
+      }
+      if (error) {
+        return body.append(el('div', { class: 'alert error', style: 'margin:0' }, error));
+      }
+      if (!servers.length) {
+        return body.append(
+          emptyState('server', 'No servers reported', 'This account has no virtual machines at the provider.'),
+        );
+      }
+
+      body.className = 'card-body tight table-scroll';
+      body.append(
+        el(
+          'table',
+          {},
+          el(
+            'thead',
+            {},
+            el(
+              'tr',
+              {},
+              el('th', {}, 'Hostname'),
+              el('th', {}, 'Plan'),
+              el('th', {}, 'State'),
+              el('th', {}, 'CPU'),
+              el('th', {}, 'RAM'),
+              el('th', {}, 'Disk'),
+              el('th', {}, 'IPv4'),
+            ),
+          ),
+          el(
+            'tbody',
+            {},
+            servers.map((s) =>
+              el(
+                'tr',
+                {},
+                el('td', { class: 'strong break' }, s.hostname || '—'),
+                el('td', { class: 'small' }, s.plan || '—'),
+                el(
+                  'td',
+                  {},
+                  el('span', { class: `badge ${s.state === 'running' ? 'ok' : ''}` }, s.state || 'unknown'),
+                ),
+                el('td', { class: 'small' }, s.cpus != null ? `${s.cpus} Cores` : '—'),
+                el('td', { class: 'small' }, formatMb(s.memoryMb)),
+                el('td', { class: 'small' }, formatMb(s.diskMb)),
+                el('td', { class: 'mono small break' }, s.ipv4?.length ? s.ipv4.join(', ') : '—'),
+              ),
+            ),
+          ),
+        ),
+      );
+    })
+    .catch((err) => {
+      clear(body).append(el('div', { class: 'alert error', style: 'margin:0' }, err.message));
+    });
+
+  return el(
+    'div',
+    { class: 'card' },
+    el(
+      'div',
+      { class: 'card-head' },
+      el(
+        'div',
+        { class: 'grow' },
+        el('h2', {}, `${provider.name} — servers`),
+        el('p', {}, 'Read live from the provider API. Not editable here.'),
+      ),
+    ),
+    body,
+  );
 }
 
 async function myResources() {
