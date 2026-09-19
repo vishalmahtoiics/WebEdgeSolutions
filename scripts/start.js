@@ -74,21 +74,45 @@ async function waitForDatabase() {
     fail('DATABASE_URL is not a valid connection string.', 'Expected: postgresql://user:password@host:5432/database');
   }
 
-  const attempts = 30;
+  // A container platform restarts a process that exits, so an unreachable
+  // database turns into a restart loop. Print the diagnosis on the FIRST failed
+  // attempt rather than only at the end, so the reason is visible in the log
+  // even if the container is cycling.
+  const localHosts = ['localhost', '127.0.0.1', '::1', '0.0.0.0'];
+  const looksLocal = localHosts.includes(target.host);
+
+  const diagnose = () => {
+    console.error(`\n  ✕ Cannot reach the database at ${target.host}:${target.port}\n`);
+    if (looksLocal) {
+      console.error(
+        `  DATABASE_URL points at "${target.host}", which inside a container means the\n` +
+          '  container itself — not your database. Use the database\'s service name\n' +
+          '  (in Coolify: the database resource\'s internal hostname) as the host.\n',
+      );
+    } else {
+      console.error(
+        '  Check that:\n' +
+          `    • the host "${target.host}" is correct and reachable from this container\n` +
+          `    • the database is running and listening on port ${target.port}\n` +
+          '    • both are attached to the same Docker network\n',
+      );
+    }
+    console.error(`  Current DATABASE_URL host:port → ${target.host}:${target.port}\n`);
+  };
+
+  const attempts = 60;
   for (let i = 1; i <= attempts; i += 1) {
     if (await tryConnect(target.host, target.port)) {
       console.log(`  ✓ Database reachable at ${target.host}:${target.port}`);
       return;
     }
-    if (i === 1) console.log(`  … waiting for database at ${target.host}:${target.port}`);
+    if (i === 1) diagnose();
+    if (i % 10 === 0) console.error(`  … still retrying (${i}/${attempts})`);
     await new Promise((r) => setTimeout(r, 2000));
   }
 
-  fail(
-    `Could not reach the database at ${target.host}:${target.port} after ${attempts} attempts.`,
-    'Check that DATABASE_URL points at the right host and that the database is running.\n' +
-      '  Inside Docker, use the database service name as the host — not localhost.',
-  );
+  diagnose();
+  fail(`Gave up after ${attempts} attempts (${attempts * 2} seconds).`);
 }
 
 /// Runs a local binary from node_modules/.bin, which is on PATH for npm scripts

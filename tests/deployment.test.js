@@ -40,14 +40,27 @@ test('entrypoint rejects an ENCRYPTION_KEY that is not 64 hex characters', () =>
   assert.match(out, /openssl rand -hex 32/, 'the message should say how to generate one');
 });
 
-test('entrypoint waits for an unreachable database instead of crashing', () => {
-  // Port 1 is closed; the script should report waiting rather than exit at once.
+test('an unreachable database is diagnosed on the first attempt, then retried', () => {
+  // Port 1 is closed. A container platform restarts a process that exits, so
+  // the reason must appear immediately — not only after the retries run out,
+  // by which point the log is scrolling past in a restart loop.
   const out = startWith(
     { DATABASE_URL: 'postgresql://u:p@127.0.0.1:1/x', SESSION_SECRET: 'x', ENCRYPTION_KEY: hex64 },
     9000,
   );
-  assert.match(out, /waiting for database at 127\.0\.0\.1:1/);
-  assert.doesNotMatch(out, /Could not reach the database/, 'it should still be retrying, not given up');
+  assert.match(out, /Cannot reach the database at 127\.0\.0\.1:1/);
+  // 127.0.0.1 inside a container is the container itself, so say so explicitly.
+  assert.match(out, /means the\s+container itself/);
+  assert.doesNotMatch(out, /Gave up after/, 'it should still be retrying, not given up');
+});
+
+test('a non-local database host gets connectivity advice instead', () => {
+  const out = startWith(
+    { DATABASE_URL: 'postgresql://u:p@db.internal:1/x', SESSION_SECRET: 'x', ENCRYPTION_KEY: hex64 },
+    9000,
+  );
+  assert.match(out, /Cannot reach the database at db\.internal:1/);
+  assert.match(out, /same Docker network/);
 });
 
 test('a Secure-cookie mismatch is reported instead of failing silently', async (t) => {
