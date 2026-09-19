@@ -115,37 +115,48 @@ function overviewPanel(data) {
           return;
         }
         const x = res.details;
+
+        // A bare dash cannot be told apart from a bug. Say plainly that the
+        // provider returned no value, so an empty row reads as a fact about
+        // the domain rather than a failure of this page.
+        const missing = () => el('span', { class: 'muted small' }, 'Not provided');
+        const value = (v, render) => (v === null || v === undefined || v === '' ? missing() : render(v));
+
+        const rows = [
+          ['Registrar status', value(x.status, (v) => v)],
+          ['Domain lock', value(x.isLocked, (v) => (v ? 'Locked' : 'Unlocked'))],
+          ['Privacy protection', value(x.isPrivacyProtected, (v) => (v ? 'Enabled' : 'Disabled'))],
+          [
+            'Nameservers',
+            x.nameservers?.length
+              ? el('span', { class: 'mono' }, x.nameservers.join(', '))
+              : missing(),
+          ],
+          ['Registered', value(x.registeredAt, formatDate)],
+          ['Expires', value(x.expiresAt, formatDate)],
+        ];
+
         liveHost.append(
-          el(
-            'dl',
-            { class: 'dl' },
-            el('div', {}, el('dt', {}, 'Registrar status'), el('dd', {}, x.status || '—')),
-            el(
-              'div',
-              {},
-              el('dt', {}, 'Domain lock'),
-              el('dd', {}, x.isLocked === null ? '—' : x.isLocked ? 'Locked' : 'Unlocked'),
-            ),
-            el(
-              'div',
-              {},
-              el('dt', {}, 'Privacy protection'),
-              el('dd', {}, x.isPrivacyProtected === null ? '—' : x.isPrivacyProtected ? 'Enabled' : 'Disabled'),
-            ),
-            el(
-              'div',
-              {},
-              el('dt', {}, 'Nameservers'),
-              el(
-                'dd',
-                { class: 'mono' },
-                x.nameservers?.length ? x.nameservers.join(', ') : '—',
-              ),
-            ),
-            el('div', {}, el('dt', {}, 'Registered'), el('dd', {}, formatDate(x.registeredAt))),
-            el('div', {}, el('dt', {}, 'Expires'), el('dd', {}, formatDate(x.expiresAt))),
-          ),
+          el('dl', { class: 'dl' }, rows.map(([label, node]) => el('div', {}, el('dt', {}, label), el('dd', {}, node)))),
         );
+
+        // When the registrar fields come back empty, the usual cause is that
+        // the domain is hosted here but registered somewhere else — worth
+        // saying, since there is nothing to fix in the portal.
+        const registrarFields = [x.isLocked, x.isPrivacyProtected, x.registeredAt, x.expiresAt];
+        const noneProvided = registrarFields.every((v) => v === null || v === undefined) && !x.nameservers?.length;
+
+        if (noneProvided) {
+          liveHost.append(
+            el(
+              'div',
+              { class: 'alert info', style: 'margin:16px 0 0' },
+              `${d.provider.name} returned no registrar details for this domain. That normally means it is `,
+              el('strong', {}, 'hosted here but registered with another registrar'),
+              ', so the registrar owns this information. You can record it by hand under FTP & Server.',
+            ),
+          );
+        }
       })
       .catch((err) => {
         clear(liveHost).append(el('div', { class: 'alert error', style: 'margin:0' }, err.message));
