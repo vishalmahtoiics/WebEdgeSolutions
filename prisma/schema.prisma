@@ -1,0 +1,231 @@
+// Hosting Management Portal — database schema
+// Kept deliberately small: one table per real concept, no speculative columns.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SUPER_ADMIN
+  USER
+}
+
+/// Where a record originally came from. Domains synced from a provider keep the
+/// provider label; anything an admin types in by hand is MANUAL.
+enum DomainSource {
+  PROVIDER
+  MANUAL
+}
+
+// ---------------------------------------------------------------------------
+// Users & access
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         Role     @default(USER)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  domains        UserDomain[]
+  serverResource ServerResource?
+
+  @@map("users")
+}
+
+/// Join table: which domains a normal user is allowed to see and manage.
+model UserDomain {
+  id         String   @id @default(cuid())
+  userId     String
+  domainId   String
+  assignedAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  domain Domain @relation(fields: [domainId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, domainId])
+  @@index([domainId])
+  @@map("user_domains")
+}
+
+// ---------------------------------------------------------------------------
+// Hosting providers
+// ---------------------------------------------------------------------------
+
+/// A configured hosting provider. `adapter` selects the server-side integration
+/// (e.g. "hostinger"); adding a provider later means adding an adapter file.
+model Provider {
+  id        String   @id @default(cuid())
+  name      String
+  adapter   String
+  docsUrl   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Result of the most recent "Test Connection" click.
+  lastTestedAt     DateTime?
+  lastTestOk       Boolean?
+  lastTestMessage  String?
+  lastSyncedAt     DateTime?
+
+  credential ProviderCredential?
+  domains    Domain[]
+
+  @@map("providers")
+}
+
+/// API token for a provider, encrypted at rest (AES-256-GCM) and never sent to
+/// the browser — only `tokenHint` (last 4 characters) is ever exposed.
+model ProviderCredential {
+  id             String   @id @default(cuid())
+  providerId     String   @unique
+  encryptedToken String
+  tokenHint      String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  provider Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@map("provider_credentials")
+}
+
+// ---------------------------------------------------------------------------
+// Domains
+// ---------------------------------------------------------------------------
+
+model Domain {
+  id     String       @id @default(cuid())
+  name   String       @unique
+  source DomainSource @default(PROVIDER)
+
+  // Null for manually added domains.
+  providerId String?
+  /// Provider's own identifier, used to match records on re-sync.
+  externalId String?
+
+  status     String    @default("unknown")
+  type       String?
+  expiresAt  DateTime?
+  registeredAt DateTime?
+  lastSyncedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  provider      Provider?      @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  dnsRecords    DnsRecord[]
+  emailAccounts EmailAccount[]
+  settings      DomainSettings?
+  assignments   UserDomain[]
+
+  @@index([providerId])
+  @@map("domains")
+}
+
+model DnsRecord {
+  id       String @id @default(cuid())
+  domainId String
+
+  name    String
+  type    String
+  content String
+  ttl     Int    @default(3600)
+
+  /// True when the record came from the provider's DNS zone rather than being
+  /// entered by hand. Provider records are replaced wholesale on each sync.
+  isFromProvider Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  domain Domain @relation(fields: [domainId], references: [id], onDelete: Cascade)
+
+  @@index([domainId])
+  @@map("dns_records")
+}
+
+model EmailAccount {
+  id       String @id @default(cuid())
+  domainId String
+
+  address String
+  status  String  @default("unknown")
+  quotaMb Int?
+  usedMb  Int?
+  notes   String?
+
+  /// Distinguishes mailboxes fetched from the provider from ones typed in.
+  isFromProvider Boolean @default(false)
+  externalId     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  domain Domain @relation(fields: [domainId], references: [id], onDelete: Cascade)
+
+  @@unique([domainId, address])
+  @@index([domainId])
+  @@map("email_accounts")
+}
+
+/// Per-domain details the provider API does not expose (FTP/FTPS, server info,
+/// notes). Everything here is optional and admin-maintained.
+model DomainSettings {
+  id       String @id @default(cuid())
+  domainId String @unique
+
+  // FTP / FTPS
+  ftpHost     String?
+  ftpPort     Int?
+  ftpUsername String?
+  ftpPassword String?
+  ftpProtocol String? // FTP | FTPS | SFTP
+
+  // Server information
+  serverIp       String?
+  serverHostname String?
+  serverLocation String?
+  nameservers    String?
+  phpVersion     String?
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  domain Domain @relation(fields: [domainId], references: [id], onDelete: Cascade)
+
+  @@map("domain_settings")
+}
+
+// ---------------------------------------------------------------------------
+// Server resources (manually configured per user)
+// ---------------------------------------------------------------------------
+
+model ServerResource {
+  id     String @id @default(cuid())
+  userId String @unique
+
+  cpuCores    Int?
+  ramMb       Int?
+  storageGb   Int?
+  bandwidthGb Int?
+  notes       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("server_resources")
+}

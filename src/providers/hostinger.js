@@ -1,0 +1,241 @@
+// Hostinger adapter.
+//
+// Endpoints follow Hostinger's official API (https://developers.hostinger.com),
+// authenticated with a Bearer API token:
+//   GET /api/domains/v1/portfolio            -> domains on the account
+//   GET /api/domains/v1/portfolio/{domain}   -> registrar detail (nameservers, lock)
+//   GET /api/hosting/v1/websites             -> hosted websites (server/account info)
+//   GET /api/dns/v1/zones/{domain}           -> DNS zone records
+//   GET /api/mail/v1/orders                  -> mail orders (one per domain)
+//   GET /api/mail/v1/orders/{orderId}/mailboxes -> mailboxes for an order
+//
+// Every method returns normalised data or throws; nothing is invented. When an
+// endpoint is not available on the account's plan the caller gets an explicit
+// "unsupported" result rather than fabricated rows.
+
+// Overridable so the integration tests can point the adapter at a local stub
+// that serves Hostinger's documented response shapes.
+const BASE_URL = process.env.HOSTINGER_API_BASE_URL || 'https://developers.hostinger.com';
+const TIMEOUT_MS = 20000;
+
+async function request(token, path, { method = 'GET' } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(`${BASE_URL}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      signal: controller.signal,
+    });
+
+    const text = await res.text();
+    let body = null;
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = text;
+      }
+    }
+
+    if (!res.ok) {
+      const message =
+        (body && (body.message || body.error)) ||
+        (res.status === 401 ? 'Invalid or expired API token.' : `Hostinger API returned ${res.status}.`);
+      const err = new Error(message);
+      err.status = res.status;
+      throw err;
+    }
+    return body;
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      const timeout = new Error('Hostinger API did not respond in time.');
+      timeout.status = 504;
+      throw timeout;
+    }
+    if (!err.status) {
+      err.status = 502;
+      err.message = `Could not reach the Hostinger API: ${err.message}`;
+    }
+    throw err;
+  }
+}
+
+/// Hostinger wraps some list responses in `{ data: [...] }` and returns others
+/// as a bare array.
+function unwrap(body) {
+  if (Array.isArray(body)) return body;
+  if (body && Array.isArray(body.data)) return body.data;
+  return [];
+}
+
+function toDate(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+export const hostingerAdapter = {
+  key: 'hostinger',
+  label: 'Hostinger',
+  defaultDocsUrl: 'https://docs.hostinger.com/api-reference/overview',
+  tokenLabel: 'API Token',
+  tokenHelp:
+    'Create a token in hPanel under Account → API. It is stored encrypted and never sent to the browser.',
+
+  // Which features this provider can actually serve. The UI reads these flags
+  // so an unsupported area degrades to manual entry instead of erroring.
+  capabilities: {
+    domains: true,
+    dns: true,
+    email: true,
+    servers: true,
+    ftp: false, // Hostinger's API does not expose FTP/FTPS credentials.
+  },
+
+  /// Cheapest authenticated call we can make; proves the token works.
+  async testConnection(token) {
+    const body = await request(token, '/api/domains/v1/portfolio');
+    const domains = unwrap(body);
+    return {
+      ok: true,
+      message: `Connection successful. Found ${domains.length} domain${domains.length === 1 ? '' : 's'} on this account.`,
+      meta: { domainCount: domains.length },
+    };
+  },
+
+  /// Domains from the registrar portfolio, merged with hosted websites so
+  /// domains that are hosted but registered elsewhere still show up.
+  async listDomains(token) {
+    const portfolio = unwrap(await request(token, '/api/domains/v1/portfolio'));
+
+    const byName = new Map();
+    for (const item of portfolio) {
+      if (!item?.domain) continue; // unclaimed free domains have a null name
+      byName.set(item.domain, {
+        name: item.domain,
+        externalId: item.id != null ? String(item.id) : null,
+        status: item.status || 'unknown',
+        type: item.type || null,
+        registeredAt: toDate(item.createdAt),
+        expiresAt: toDate(item.expiresAt),
+      });
+    }
+
+    // Hosted websites are a best-effort enrichment: some plans/tokens cannot
+    // read them, which must not fail the whole sync.
+    try {
+      const websites = unwrap(await request(token, '/api/hosting/v1/websites'));
+      for (const site of websites) {
+        if (!site?.domain) continue;
+        const existing = byName.get(site.domain);
+        if (existing) {
+          existing.website = site;
+        } else {
+          byName.set(site.domain, {
+            name: site.domain,
+            externalId: null,
+            status: site.isEnabled === false ? 'suspended' : 'active',
+            type: 'hosting',
+            registeredAt: toDate(site.createdAt),
+            expiresAt: null,
+            website: site,
+          });
+        }
+      }
+    } catch {
+      // Ignored on purpose — portfolio domains are still returned.
+    }
+
+    return [...byName.values()];
+  },
+
+  /// Registrar detail for one domain (nameservers, lock/privacy state).
+  async getDomainDetails(token, domainName) {
+    const body = await request(token, `/api/domains/v1/portfolio/${encodeURIComponent(domainName)}`);
+    if (!body || typeof body !== 'object') return null;
+    const data = body.data && typeof body.data === 'object' ? body.data : body;
+    const ns = data.nameServers || {};
+    const nameservers = Object.keys(ns)
+      .sort()
+      .map((k) => ns[k])
+      .filter(Boolean);
+    return {
+      status: data.status || null,
+      isLocked: data.isLocked ?? null,
+      isPrivacyProtected: data.isPrivacyProtected ?? null,
+      nameservers,
+      registeredAt: toDate(data.registeredAt || data.createdAt),
+      expiresAt: toDate(data.expiresAt),
+    };
+  },
+
+  /// DNS zone, flattened from Hostinger's name-grouped shape into one row per
+  /// record value, which is what the UI and database store.
+  async listDnsRecords(token, domainName) {
+    const body = await request(token, `/api/dns/v1/zones/${encodeURIComponent(domainName)}`);
+    const groups = unwrap(body);
+    const flat = [];
+    for (const group of groups) {
+      const entries = Array.isArray(group?.records) ? group.records : [];
+      for (const entry of entries) {
+        flat.push({
+          name: group.name ?? '@',
+          type: group.type ?? 'A',
+          content: entry?.content ?? '',
+          ttl: Number(group.ttl) || 3600,
+          isDisabled: Boolean(entry?.isDisabled),
+        });
+      }
+    }
+    return flat;
+  },
+
+  /// Mailboxes for a domain. Hostinger scopes mailboxes to a mail *order*, so
+  /// we find the order matching this domain first. No order means the domain
+  /// has no email plan — an empty list, not an error.
+  async listEmailAccounts(token, domainName) {
+    const orders = unwrap(await request(token, '/api/mail/v1/orders'));
+    const wanted = String(domainName).toLowerCase();
+
+    const order = orders.find((o) => {
+      const d = o?.domain;
+      const name = typeof d === 'string' ? d : d?.domain || d?.name;
+      return String(name || '').toLowerCase() === wanted;
+    });
+    if (!order?.id) return [];
+
+    const mailboxes = unwrap(
+      await request(token, `/api/mail/v1/orders/${encodeURIComponent(order.id)}/mailboxes`),
+    );
+    return mailboxes
+      .filter((m) => m?.address)
+      .map((m) => ({
+        address: m.address,
+        status: m.status || 'unknown',
+        externalId: m.id != null ? String(m.id) : null,
+        quotaMb: m.usage?.quota != null ? Math.round(Number(m.usage.quota) / (1024 * 1024)) : null,
+        usedMb: m.usage?.used != null ? Math.round(Number(m.usage.used) / (1024 * 1024)) : null,
+      }));
+  },
+
+  /// VPS instances on the account, shown read-only in the Super Admin area.
+  async listServers(token) {
+    const machines = unwrap(await request(token, '/api/vps/v1/virtual-machines'));
+    return machines.map((vm) => ({
+      id: vm.id != null ? String(vm.id) : null,
+      hostname: vm.hostname || null,
+      plan: vm.plan || null,
+      state: vm.state || null,
+      cpus: vm.cpus ?? null,
+      memoryMb: vm.memory ?? null,
+      diskMb: vm.disk ?? null,
+      bandwidthMb: vm.bandwidth ?? null,
+      ipv4: Array.isArray(vm.ipv4) ? vm.ipv4.map((ip) => ip?.address).filter(Boolean) : [],
+    }));
+  },
+};

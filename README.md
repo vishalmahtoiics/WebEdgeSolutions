@@ -1,0 +1,213 @@
+# Hosting Management Portal
+
+A lightweight hosting management portal: connect a hosting provider's API, test the
+connection, sync domains into PostgreSQL, and manage domains, DNS, mailboxes,
+users and resource allocations from one clean dashboard.
+
+**Hostinger** is supported out of the box. The provider layer is pluggable, so
+additional hosts can be added without touching the rest of the application.
+
+- **Backend** — Node.js + Express, session authentication
+- **Database** — PostgreSQL via Prisma ORM
+- **Frontend** — plain HTML/CSS/JS (ES modules, no build step)
+
+---
+
+## Quick start
+
+```bash
+npm install
+npm run setup     # creates .env, runs migrations, generates the client, seeds the admin
+npm run dev
+```
+
+Then open <http://localhost:3000> and sign in with the credentials printed by the
+seed step (`admin@example.com` / `Admin@12345` by default).
+
+> Change the admin password from **Settings** straight after the first sign-in.
+
+### Manual setup
+
+If you prefer to run each step yourself:
+
+```bash
+cp .env.example .env      # then edit DATABASE_URL, SESSION_SECRET, ENCRYPTION_KEY
+npm install
+npx prisma migrate dev
+npx prisma generate
+npm run seed
+npm run dev
+```
+
+### Prerequisites
+
+- Node.js 18 or newer
+- A PostgreSQL database you can connect to
+
+Create one locally with:
+
+```bash
+createdb hostportal
+psql -c "CREATE ROLE hostportal LOGIN PASSWORD 'hostportal';"
+psql -c "ALTER DATABASE hostportal OWNER TO hostportal;"
+psql -c "ALTER ROLE hostportal CREATEDB;"   # only needed for `prisma migrate dev`
+```
+
+---
+
+## Environment variables
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `DATABASE_URL` | yes | PostgreSQL connection string. |
+| `SESSION_SECRET` | yes | Signs session cookies. Generate with `openssl rand -hex 32`. |
+| `ENCRYPTION_KEY` | yes | 64 hex characters (32 bytes) used to encrypt provider API tokens at rest. Generate with `openssl rand -hex 32`. |
+| `PORT` | no | Defaults to `3000`. |
+| `NODE_ENV` | no | Set to `production` when deploying. |
+| `SECURE_COOKIES` | no | Set to `true` when serving over HTTPS. |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NAME` | no | Used once by `npm run seed`. |
+
+`npm run setup` generates real random values for `SESSION_SECRET` and
+`ENCRYPTION_KEY` the first time it runs.
+
+> Changing `ENCRYPTION_KEY` later makes existing provider tokens unreadable —
+> you would need to re-enter them.
+
+---
+
+## Using the portal
+
+1. **Providers / APIs → Add Provider** — choose Hostinger and paste your API
+   token (hPanel → Account → API). The token is encrypted before it is stored.
+2. **Test Connection** — calls the provider's API and reports success or the
+   exact failure. The **Sync Domains** button unlocks only after a test passes.
+3. **Sync Domains** — imports domains into the local database. Safe to run as
+   often as you like: domains are matched by name, so nothing is duplicated.
+4. **Domains → Manage** — per-domain tabs for information, DNS records,
+   mailboxes, and FTP/server details.
+5. **Users** — create users, assign them specific domains, and set their
+   resource allocation.
+
+### Where data comes from
+
+Every record is labelled so you always know its origin:
+
+- `Hostinger` (or whatever you named the provider) — fetched from the API
+- `Manually Added` — entered by an administrator
+
+Nothing is invented. If the provider's API does not expose something, the portal
+says so and lets you fill it in by hand rather than displaying placeholder data.
+
+**Manual entries are never overwritten by a sync.** A domain you added by hand
+is skipped during sync; a DNS record or mailbox you added or edited is kept
+while the provider-sourced ones are refreshed.
+
+---
+
+## Provider capabilities
+
+Each adapter declares what it can do, and the UI adapts. For Hostinger:
+
+| Feature | Supported | Endpoint |
+| --- | --- | --- |
+| Domains | yes | `GET /api/domains/v1/portfolio`, `GET /api/hosting/v1/websites` |
+| Domain details | yes | `GET /api/domains/v1/portfolio/{domain}` |
+| DNS records | yes | `GET /api/dns/v1/zones/{domain}` |
+| Email accounts | yes | `GET /api/mail/v1/orders` → `GET /api/mail/v1/orders/{orderId}/mailboxes` |
+| Servers (VPS) | yes | `GET /api/vps/v1/virtual-machines` |
+| FTP / FTPS credentials | **no** | Not exposed by the API — configure manually per domain. |
+
+Reference: [Hostinger API documentation](https://docs.hostinger.com/api-reference/overview).
+
+### Adding another provider
+
+1. Create `src/providers/<name>.js` exporting an adapter with a `key`, `label`,
+   `capabilities`, and a `testConnection(token)` method. Implement whichever of
+   `listDomains`, `getDomainDetails`, `listDnsRecords`, `listEmailAccounts` and
+   `listServers` that provider supports.
+2. Register it in `src/providers/index.js`.
+
+Unimplemented methods degrade gracefully — the relevant panel falls back to
+manual entry instead of erroring.
+
+---
+
+## Roles and access
+
+**Super Admin** manages everything: providers, all domains, users, and resource
+allocations.
+
+**User** sees only the domains assigned to them. Authorization is enforced in
+the backend on every domain-scoped route, so changing an id in the URL returns
+`404` rather than another user's data. Disabling an account revokes access
+immediately, including any session already signed in.
+
+---
+
+## Security
+
+- Passwords hashed with bcrypt (cost 12).
+- Provider API tokens encrypted at rest with AES-256-GCM and **never** sent to
+  the browser — the UI only ever sees the last four characters.
+- Sessions stored server-side in PostgreSQL; cookies are `httpOnly` and
+  `sameSite=lax`, and `Secure` when `SECURE_COOKIES=true`.
+- Session is regenerated on sign-in to prevent session fixation.
+- All request bodies validated with zod.
+- Rate limiting on the sign-in endpoint.
+- Security headers and a strict Content-Security-Policy via helmet.
+- No credentials are hard-coded; everything sensitive comes from the environment.
+
+---
+
+## Testing
+
+With the app running (`npm run dev`) in another terminal:
+
+```bash
+npm test
+```
+
+Covers authentication, authorization boundaries, provider configuration,
+credential handling, domain/DNS/email management, and the full sync flow
+including the no-duplicates guarantee.
+
+The adapter and sync suites run against a local stub that serves Hostinger's
+documented response shapes, so they verify the integration without needing live
+credentials.
+
+---
+
+## Project structure
+
+```
+prisma/
+  schema.prisma        Database schema
+  seed.js              Creates the first Super Admin
+scripts/
+  setup.js             One-command setup
+src/
+  server.js            Express app and middleware
+  config.js            Environment configuration
+  lib/                 Encryption, error helpers
+  middleware/          Authentication, authorization, validation
+  providers/           Pluggable provider adapters (hostinger.js)
+  routes/              API endpoints
+  services/            Provider credentials and sync logic
+public/
+  index.html           SPA shell
+  css/app.css          Styles
+  js/                  Frontend modules and views
+tests/                 Test suites
+```
+
+## Scripts
+
+| Command | Description |
+| --- | --- |
+| `npm run setup` | Full first-time setup. |
+| `npm run dev` | Start with auto-reload. |
+| `npm start` | Start normally. |
+| `npm test` | Run the test suites. |
+| `npm run seed` | Create the Super Admin (idempotent). |
+| `npm run migrate` | Create and apply a migration. |
+| `npm run studio` | Browse the database with Prisma Studio. |
