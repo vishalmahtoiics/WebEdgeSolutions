@@ -83,6 +83,40 @@ function providerCard(provider, adapters) {
     }
   };
 
+  // One action for the whole account: domains, then DNS and mailboxes for each.
+  const syncAllBtn = el('button', { class: 'btn', disabled: !provider.lastTestOk }, 'Sync Everything');
+  syncAllBtn.onclick = async () => {
+    const original = syncAllBtn.textContent;
+    [syncBtn, syncAllBtn].forEach((b) => (b.disabled = true));
+    clear(syncAllBtn).append(el('span', { class: 'spinner' }), 'Syncing everything…');
+    clear(resultHost);
+    try {
+      const res = await api(`/providers/${provider.id}/sync-all`, { method: 'POST' });
+      resultHost.append(
+        el(
+          'div',
+          { class: res.failures.length ? 'alert warn' : 'alert ok', style: 'margin:0' },
+          res.message,
+          ' ',
+          el('a', { href: '#/domains', onclick: () => navigate('domains') }, 'View domains →'),
+          res.failures.length
+            ? el(
+                'ul',
+                {},
+                res.failures.map((f) => el('li', {}, `${f.domain}: ${f.problems.join(' ')}`)),
+              )
+            : null,
+        ),
+      );
+      toast(res.message, res.failures.length ? '' : 'ok');
+    } catch (err) {
+      resultHost.append(el('div', { class: 'alert error', style: 'margin:0' }, err.message));
+    } finally {
+      [syncBtn, syncAllBtn].forEach((b) => (b.disabled = false));
+      clear(syncAllBtn).append(original);
+    }
+  };
+
   const testBtn = el('button', { class: 'btn' }, 'Test Connection');
   testBtn.onclick = async () => {
     testBtn.disabled = true;
@@ -93,10 +127,12 @@ function providerCard(provider, adapters) {
       const res = await api(`/providers/${provider.id}/test`, { method: 'POST' });
       resultHost.append(el('div', { class: 'alert ok', style: 'margin:0' }, `✓ ${res.message}`));
       syncBtn.disabled = false;
+      syncAllBtn.disabled = false;
       toast('Connection successful.', 'ok');
     } catch (err) {
       resultHost.append(el('div', { class: 'alert error', style: 'margin:0' }, `✕ ${err.message}`));
       syncBtn.disabled = true;
+      syncAllBtn.disabled = true;
     } finally {
       testBtn.disabled = false;
       clear(testBtn).append(original);
@@ -192,7 +228,7 @@ function providerCard(provider, adapters) {
           el('dd', {}, caps.length ? caps.join(', ') : '—'),
         ),
       ),
-      el('div', { style: 'display:flex;gap:9px;flex-wrap:wrap;margin-top:16px' }, testBtn, syncBtn),
+      el('div', { style: 'display:flex;gap:9px;flex-wrap:wrap;margin-top:16px' }, testBtn, syncBtn, syncAllBtn),
       resultHost,
       provider.lastTestMessage && !provider.lastTestOk
         ? el('div', { class: 'small muted', style: 'margin-top:10px' }, `Last result: ${provider.lastTestMessage}`)

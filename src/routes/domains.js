@@ -6,7 +6,14 @@ import { requireAuth, requireAdmin, getAccessibleDomain, isAdmin } from '../midd
 import { asyncHandler, badRequest, notFound, HttpError } from '../lib/errors.js';
 import { getAdapter, tryCapability } from '../providers/index.js';
 import { loadProviderWithToken } from '../services/providerService.js';
-import { syncDnsRecords, syncEmailAccounts } from '../services/syncService.js';
+import { syncDnsRecords, syncEmailAccounts, refreshDomain } from '../services/syncService.js';
+import {
+  presentDomainSummary,
+  presentDomainDetail,
+  presentDnsRecord,
+  presentEmailAccount,
+  presentCapabilities,
+} from '../lib/visibility.js';
 
 export const domainsRouter = Router();
 domainsRouter.use(requireAuth);
@@ -21,11 +28,6 @@ const withDomain = (include = {}) =>
     req.domain = domain;
     next();
   });
-
-function sourceLabel(domain) {
-  if (domain.source === 'MANUAL') return 'Manually Added';
-  return domain.provider?.name || 'Provider';
-}
 
 // ---------------------------------------------------------------------------
 // List / create
@@ -48,22 +50,8 @@ domainsRouter.get(
       },
     });
 
-    res.json({
-      domains: domains.map((d) => ({
-        id: d.id,
-        name: d.name,
-        status: d.status,
-        type: d.type,
-        source: d.source,
-        sourceLabel: sourceLabel(d),
-        provider: d.provider,
-        expiresAt: d.expiresAt,
-        lastSyncedAt: d.lastSyncedAt,
-        emailCount: d._count.emailAccounts,
-        dnsCount: d._count.dnsRecords,
-        userCount: d._count.assignments,
-      })),
-    });
+    const admin = isAdmin(req.user);
+    res.json({ domains: domains.map((d) => presentDomainSummary(d, admin)) });
   }),
 );
 
@@ -115,27 +103,15 @@ domainsRouter.get(
     const d = req.domain;
     const adapter = d.provider ? getAdapter(d.provider.adapter) : null;
 
+    const admin = isAdmin(req.user);
     res.json({
-      domain: {
-        id: d.id,
-        name: d.name,
-        status: d.status,
-        type: d.type,
-        source: d.source,
-        sourceLabel: sourceLabel(d),
-        provider: d.provider,
-        externalId: d.externalId,
-        registeredAt: d.registeredAt,
-        expiresAt: d.expiresAt,
-        lastSyncedAt: d.lastSyncedAt,
-        createdAt: d.createdAt,
-      },
-      // Drives which panels offer a "Refresh from provider" button.
-      capabilities: adapter?.capabilities || {},
+      domain: presentDomainDetail(d, admin),
+      // Drives which panels offer a refresh action.
+      capabilities: presentCapabilities(adapter?.capabilities, d, admin),
       settings: d.settings,
-      dnsRecords: d.dnsRecords,
-      emailAccounts: d.emailAccounts,
-      assignedUsers: isAdmin(req.user) ? d.assignments.map((a) => a.user) : undefined,
+      dnsRecords: d.dnsRecords.map((r) => presentDnsRecord(r, admin)),
+      emailAccounts: d.emailAccounts.map((m) => presentEmailAccount(m, admin)),
+      assignedUsers: admin ? d.assignments.map((a) => a.user) : undefined,
     });
   }),
 );
@@ -176,7 +152,7 @@ domainsRouter.delete(
 /// Pulls registrar detail (nameservers, lock state) straight from the provider.
 /// Not stored — it is shown live so it can never go stale in the UI.
 domainsRouter.get(
-  '/:id/provider-details',
+  '/:id/registration',
   withDomain({ provider: true }),
   asyncHandler(async (req, res) => {
     if (!req.domain.providerId) {
@@ -185,6 +161,40 @@ domainsRouter.get(
     const { adapter, token } = await loadProviderWithToken(req.domain.providerId);
     const result = await tryCapability(adapter, 'getDomainDetails', token, req.domain.name);
     res.json({ supported: result.supported, details: result.data, error: result.error });
+  }),
+);
+
+/// Reloads this domain's DNS records and mailboxes in one action.
+///
+/// Worded neutrally on purpose: this is the button an assigned user presses
+/// when their information looks out of date, and it must not tell them which
+/// company the data comes from.
+domainsRouter.post(
+  '/:id/refresh',
+  withDomain({ provider: true }),
+  asyncHandler(async (req, res) => {
+    if (!req.domain.providerId) {
+      throw badRequest('This domain is maintained by hand, so there is nothing to refresh.');
+    }
+
+    const result = await refreshDomain(req.domain);
+    const parts = [];
+    if (result.dns?.ok) parts.push(`${result.dns.count} DNS record${result.dns.count === 1 ? '' : 's'}`);
+    if (result.emails?.ok) parts.push(`${result.emails.count} mailbox${result.emails.count === 1 ? '' : 'es'}`);
+
+    const problems = [result.dns?.error, result.emails?.error].filter(Boolean);
+    if (!parts.length && problems.length) {
+      // Nothing came back and something went wrong — say so rather than
+      // reporting a cheerful "refreshed" that changed nothing.
+      throw badRequest(problems.join(' '));
+    }
+
+    res.json({
+      ok: true,
+      dns: result.dns,
+      emails: result.emails,
+      message: parts.length ? `Refreshed ${parts.join(' and ')}.` : 'Nothing new to load.',
+    });
   }),
 );
 
@@ -443,7 +453,7 @@ domainsRouter.post(
 /// portal's record. Destroying a real mailbox should never be something you
 /// can do by reaching for the same button.
 domainsRouter.delete(
-  '/:id/emails/:emailId/provider',
+  '/:id/emails/:emailId/destroy',
   withDomain({ provider: true }),
   asyncHandler(async (req, res) => {
     const mailbox = await prisma.emailAccount.findFirst({

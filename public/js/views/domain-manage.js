@@ -24,23 +24,26 @@ export async function renderDomainManage({ param, user }) {
           'div',
           { style: 'display:flex;gap:8px;margin-top:8px;flex-wrap:wrap' },
           statusBadge(d.status),
-          sourceBadge(d.sourceLabel, d.source),
+          // Where a domain came from is an administrator's concern.
+          isAdmin ? sourceBadge(d.sourceLabel, d.source) : null,
           d.type ? el('span', { class: 'badge' }, d.type) : null,
         ),
       ),
-      isAdmin
-        ? el(
-            'div',
-            { class: 'page-actions' },
-            el('button', { class: 'btn', onclick: () => editDomainModal(d) }, 'Edit'),
-            el(
+      el(
+        'div',
+        { class: 'page-actions' },
+        // The button a user reaches for when their information looks stale.
+        d.canRefresh ? refreshButton(d) : null,
+        isAdmin ? el('button', { class: 'btn', onclick: () => editDomainModal(d) }, 'Edit') : null,
+        isAdmin
+          ? el(
               'button',
               {
                 class: 'btn danger',
                 onclick: () =>
                   confirmModal({
                     title: 'Delete domain',
-                    message: `Delete ${d.name} and all of its DNS records, mailboxes and settings from the portal? This does not affect the domain at the provider.`,
+                    message: `Delete ${d.name} and all of its DNS records, mailboxes and settings from the portal? The domain itself is not affected.`,
                     confirmLabel: 'Delete',
                     onConfirm: async () => {
                       await api(`/domains/${d.id}`, { method: 'DELETE' });
@@ -50,9 +53,9 @@ export async function renderDomainManage({ param, user }) {
                   }),
               },
               'Delete',
-            ),
-          )
-        : null,
+            )
+          : null,
+      ),
     ),
   );
 
@@ -82,26 +85,47 @@ export async function renderDomainManage({ param, user }) {
   return frag;
 }
 
+/// Pulls this domain's DNS and mailboxes again. Worded without reference to
+/// any provider, because a user must not learn who hosts their domain.
+function refreshButton(domain) {
+  const btn = el('button', { class: 'btn' }, 'Refresh');
+  btn.onclick = async () => {
+    btn.disabled = true;
+    const original = btn.textContent;
+    clear(btn).append(el('span', { class: 'spinner' }), 'Refreshing…');
+    try {
+      const res = await api(`/domains/${domain.id}/refresh`, { method: 'POST' });
+      toast(res.message, 'ok');
+      refresh();
+    } catch (err) {
+      toast(err.message, 'error');
+      btn.disabled = false;
+      clear(btn).append(original);
+    }
+  };
+  return btn;
+}
+
 function renderPanel(key, data, isAdmin) {
   if (key === 'dns') return dnsPanel(data, isAdmin);
   if (key === 'emails') return emailPanel(data, isAdmin);
   if (key === 'settings') return settingsPanel(data);
   if (key === 'access') return accessPanel(data);
-  return overviewPanel(data);
+  return overviewPanel(data, isAdmin);
 }
 
 // ---------------------------------------------------------------------------
 // Overview
 // ---------------------------------------------------------------------------
 
-function overviewPanel(data) {
+function overviewPanel(data, isAdmin) {
   const d = data.domain;
 
   const liveHost = el('div', { class: 'card-body' }, el('div', { class: 'muted small' }, 'Loading…'));
 
   // Registrar detail is fetched live rather than stored, so it is never stale.
-  if (d.provider) {
-    api(`/domains/${d.id}/provider-details`)
+  if (d.canRefresh) {
+    api(`/domains/${d.id}/registration`)
       .then((res) => {
         clear(liveHost);
         if (!res.supported || !res.details) {
@@ -109,7 +133,7 @@ function overviewPanel(data) {
             el(
               'div',
               { class: 'muted small' },
-              res.error || 'This provider does not expose registrar details for this domain.',
+              res.error || 'No registration details are available for this domain.',
             ),
           );
           return;
@@ -151,9 +175,9 @@ function overviewPanel(data) {
             el(
               'div',
               { class: 'alert info', style: 'margin:16px 0 0' },
-              `${d.provider.name} returned no registrar details for this domain. That normally means it is `,
-              el('strong', {}, 'hosted here but registered with another registrar'),
-              ', so the registrar owns this information. You can record it by hand under FTP & Server.',
+              isAdmin
+                ? `${d.provider?.name || 'The provider'} returned no registrar details for this domain. That normally means it is hosted there but registered with another registrar, so the registrar owns this information. You can record it by hand under FTP & Server.`
+                : 'No registration details are available for this domain. You can record them by hand under FTP & Server.',
             ),
           );
         }
@@ -166,7 +190,9 @@ function overviewPanel(data) {
       el(
         'div',
         { class: 'muted small' },
-        'This domain was added manually and is not linked to a provider API.',
+        isAdmin
+          ? 'This domain was added manually and is not linked to a provider API.'
+          : 'No registration details are available for this domain.',
       ),
     );
   }
@@ -185,7 +211,9 @@ function overviewPanel(data) {
           'dl',
           { class: 'dl' },
           el('div', {}, el('dt', {}, 'Domain'), el('dd', { class: 'strong' }, d.name)),
-          el('div', {}, el('dt', {}, 'Provider'), el('dd', {}, sourceBadge(d.sourceLabel, d.source))),
+          isAdmin
+            ? el('div', {}, el('dt', {}, 'Provider'), el('dd', {}, sourceBadge(d.sourceLabel, d.source)))
+            : null,
           el('div', {}, el('dt', {}, 'Status'), el('dd', {}, statusBadge(d.status))),
           el('div', {}, el('dt', {}, 'Type'), el('dd', {}, d.type || '—')),
           el('div', {}, el('dt', {}, 'Registered'), el('dd', {}, formatDate(d.registeredAt))),
@@ -204,8 +232,8 @@ function overviewPanel(data) {
         el(
           'div',
           { class: 'grow' },
-          el('h2', {}, 'Live provider details'),
-          el('p', {}, 'Read directly from the provider API.'),
+          el('h2', {}, isAdmin ? 'Live provider details' : 'Registration details'),
+          el('p', {}, isAdmin ? 'Read directly from the provider API.' : 'Read live from the domain registry.'),
         ),
       ),
       liveHost,
@@ -219,7 +247,8 @@ function overviewPanel(data) {
 
 function dnsPanel(data, isAdmin) {
   const d = data.domain;
-  const canSync = Boolean(d.provider) && data.capabilities?.dns;
+  // Admins get an explicit zone reload; users use the page-level Refresh.
+  const canSync = isAdmin && Boolean(d.provider) && data.capabilities?.dns;
 
   const syncBtn = el('button', { class: 'btn' }, 'Load from provider');
   syncBtn.onclick = async () => {
@@ -242,11 +271,13 @@ function dnsPanel(data, isAdmin) {
       el('td', {}, el('span', { class: 'badge' }, r.type)),
       el('td', { class: 'mono break' }, r.content),
       el('td', { class: 'small muted' }, String(r.ttl)),
-      el(
-        'td',
-        {},
-        el('span', { class: `badge ${r.isFromProvider ? 'accent' : ''}` }, r.isFromProvider ? 'Provider' : 'Manual'),
-      ),
+      isAdmin
+        ? el(
+            'td',
+            {},
+            el('span', { class: `badge ${r.isFromProvider ? 'accent' : ''}` }, r.isFromProvider ? 'Provider' : 'Manual'),
+          )
+        : null,
       el(
         'td',
         { class: 'actions' },
@@ -287,9 +318,11 @@ function dnsPanel(data, isAdmin) {
         el(
           'p',
           {},
-          canSync
-            ? 'Records loaded from the provider are replaced each time you refresh. Records you add or edit here are kept.'
-            : 'This domain has no provider DNS integration — records are managed manually.',
+          isAdmin
+            ? canSync
+              ? 'Records loaded from the provider are replaced each time you refresh. Records you add or edit here are kept.'
+              : 'This domain has no provider DNS integration — records are managed manually.'
+            : 'The DNS records for this domain. Use Refresh above to reload them.',
         ),
       ),
       canSync ? syncBtn : null,
@@ -312,7 +345,7 @@ function dnsPanel(data, isAdmin) {
                 el('th', {}, 'Type'),
                 el('th', {}, 'Value'),
                 el('th', {}, 'TTL'),
-                el('th', {}, 'Source'),
+                isAdmin ? el('th', {}, 'Source') : null,
                 el('th', {}, ''),
               ),
             ),
@@ -325,7 +358,11 @@ function dnsPanel(data, isAdmin) {
           emptyState(
             'dns',
             'No DNS records',
-            canSync ? 'Click "Load from provider" to import the live zone.' : 'Add a record to get started.',
+            isAdmin
+              ? canSync
+                ? 'Click "Load from provider" to import the live zone.'
+                : 'Add a record to get started.'
+              : 'Use Refresh above to load them, or add a record yourself.',
           ),
         ),
   );
@@ -374,6 +411,13 @@ function dnsModal(domainId, record = null) {
               'This record came from the provider. Saving your changes marks it as a manual record — it will no longer be replaced when you refresh the zone, and the change is not pushed back to the provider.',
             )
           : null,
+        record && record.isFromProvider === undefined
+          ? el(
+              'div',
+              { class: 'alert info' },
+              'Your change is kept here and will not be overwritten by a refresh. It is not pushed to the name servers.',
+            )
+          : null,
         el('div', { class: 'form-row' }, field('Name', name), field('Type', type)),
         field('Value', content),
         field('TTL (seconds)', ttl),
@@ -388,10 +432,12 @@ function dnsModal(domainId, record = null) {
 
 function emailPanel(data, isAdmin) {
   const d = data.domain;
-  const canSync = Boolean(d.provider) && data.capabilities?.email;
-  // Creating, deleting and re-passwording mailboxes act on the real hosting
-  // account, so they only appear when the provider actually supports them.
-  const canWrite = Boolean(d.provider) && data.capabilities?.emailWrite;
+  const canSync = isAdmin && Boolean(d.provider) && data.capabilities?.email;
+  // Creating, deleting and re-passwording mailboxes act on the real mail
+  // server, so they only appear where that is actually supported.
+  const canWrite = isAdmin
+    ? Boolean(d.provider) && data.capabilities?.emailWrite
+    : Boolean(data.capabilities?.canManageEmail);
 
   const syncBtn = el('button', { class: 'btn' }, 'Load from provider');
   syncBtn.onclick = async () => {
@@ -413,11 +459,13 @@ function emailPanel(data, isAdmin) {
       el('td', { class: 'strong break' }, m.address),
       el('td', {}, statusBadge(m.status)),
       el('td', { class: 'small muted nowrap' }, m.usedMb != null || m.quotaMb != null ? `${formatMb(m.usedMb)} / ${formatMb(m.quotaMb)}` : '—'),
-      el(
-        'td',
-        {},
-        el('span', { class: `badge ${m.isFromProvider ? 'accent' : ''}` }, m.isFromProvider ? 'Provider' : 'Manual'),
-      ),
+      isAdmin
+        ? el(
+            'td',
+            {},
+            el('span', { class: `badge ${m.isFromProvider ? 'accent' : ''}` }, m.isFromProvider ? 'Provider' : 'Manual'),
+          )
+        : null,
       el(
         'td',
         { class: 'actions' },
@@ -425,7 +473,7 @@ function emailPanel(data, isAdmin) {
         ' ',
         // Password and provider deletion only mean anything for a mailbox that
         // actually exists at the provider.
-        canWrite && m.externalId
+        canWrite && (m.externalId || m.isManaged)
           ? [
               el('button', { class: 'btn sm', onclick: () => passwordModal(d.id, m) }, 'Password'),
               ' ',
@@ -450,9 +498,11 @@ function emailPanel(data, isAdmin) {
         el(
           'p',
           {},
-          canSync
-            ? 'Mailboxes are read from the provider where an email plan exists. You can also add mailboxes manually.'
-            : 'No provider email integration for this domain — mailboxes are tracked manually.',
+          isAdmin
+            ? canSync
+              ? 'Mailboxes are read from the provider where an email plan exists. You can also add mailboxes manually.'
+              : 'No provider email integration for this domain — mailboxes are tracked manually.'
+            : 'The mailboxes on this domain. Use Refresh above to reload them.',
         ),
       ),
       canSync ? syncBtn : null,
@@ -477,7 +527,7 @@ function emailPanel(data, isAdmin) {
                 el('th', {}, 'Address'),
                 el('th', {}, 'Status'),
                 el('th', {}, 'Usage'),
-                el('th', {}, 'Source'),
+                isAdmin ? el('th', {}, 'Source') : null,
                 el('th', {}, ''),
               ),
             ),
@@ -490,15 +540,19 @@ function emailPanel(data, isAdmin) {
           emptyState(
             'mail',
             'No mailboxes listed',
-            canSync
-              ? 'Click "Load from provider", or add a mailbox manually if the provider has no email plan for this domain.'
-              : 'Add a mailbox to track it here.',
+            isAdmin
+              ? canSync
+                ? 'Click "Load from provider", or add a mailbox manually if the provider has no email plan for this domain.'
+                : 'Add a mailbox to track it here.'
+              : 'Use Refresh above to load them, or create a mailbox.',
           ),
         ),
   );
 
   panel.append(mailboxCard);
-  if (d.provider && data.capabilities?.emailExtras) panel.append(emailExtrasCard(d));
+  // Forwarders and aliases are shown to admins only: the card describes the
+  // provider's own panel.
+  if (isAdmin && d.provider && data.capabilities?.emailExtras) panel.append(emailExtrasCard(d));
   return panel;
 }
 
@@ -600,9 +654,7 @@ function createMailboxModal(domain) {
         el(
           'div',
           { class: 'alert warn' },
-          'This creates a real mailbox on ',
-          el('strong', {}, domain.provider?.name || 'the provider'),
-          ', not just a record in this portal.',
+          'This creates a real mailbox on the mail server, not just a record in this portal.',
         ),
         el(
           'div',
@@ -658,7 +710,7 @@ function passwordModal(domainId, mailbox) {
 /// acts, so they are presented as an explicit choice rather than one button
 /// whose meaning depends on context.
 function deleteMailboxModal(domain, mailbox, canWrite) {
-  const atProvider = canWrite && Boolean(mailbox.externalId);
+  const atProvider = canWrite && Boolean(mailbox.externalId || mailbox.isManaged);
   const alertHost = el('div');
 
   const removeLocal = el('button', { class: 'btn' }, 'Remove from portal only');
@@ -676,7 +728,7 @@ function deleteMailboxModal(domain, mailbox, canWrite) {
     destroy.disabled = confirmText.value.trim().toLowerCase() !== mailbox.address.toLowerCase();
   };
   destroy.onclick = submitHandler(destroy, alertHost, async () => {
-    const res = await api(`/domains/${domain.id}/emails/${mailbox.id}/provider`, { method: 'DELETE' });
+    const res = await api(`/domains/${domain.id}/emails/${mailbox.id}/destroy`, { method: 'DELETE' });
     toast(res.message, 'ok');
     close();
     refresh();
@@ -693,7 +745,7 @@ function deleteMailboxModal(domain, mailbox, canWrite) {
           ? el(
               'p',
               { class: 'muted', style: 'margin-top:0' },
-              'This mailbox exists only as a record in this portal, so removing it changes nothing at the provider.',
+              'This mailbox exists only as a record in this portal, so removing it changes nothing on the mail server.',
             )
           : el(
               'div',
@@ -701,15 +753,13 @@ function deleteMailboxModal(domain, mailbox, canWrite) {
               el(
                 'p',
                 { style: 'margin-top:0' },
-                'This mailbox exists at ',
-                el('strong', {}, domain.provider?.name || 'the provider'),
-                '. Choose what should happen:',
+                'This is a live mailbox. Choose what should happen:',
               ),
               el(
                 'div',
                 { class: 'alert danger', style: 'background:#fdeceb;color:#c02626;border-color:#f5cecb' },
                 el('strong', {}, 'Delete permanently'),
-                ' destroys the mailbox and every message in it at the provider. This cannot be undone.',
+                ' destroys the mailbox and every message in it. This cannot be undone.',
               ),
               field('Type the address to confirm permanent deletion', confirmText),
             ),
@@ -820,7 +870,7 @@ function settingsPanel(data) {
       ? el(
           'div',
           { class: 'alert info' },
-          'This provider\'s API does not expose FTP/FTPS credentials or server details, so they are configured here manually.',
+          'FTP/FTPS credentials and server details cannot be fetched automatically, so they are configured here by hand.',
         )
       : null,
     el(

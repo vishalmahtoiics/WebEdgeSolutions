@@ -234,7 +234,17 @@ export const hostingerAdapter = {
   /// DNS zone, flattened from Hostinger's name-grouped shape into one row per
   /// record value, which is what the UI and database store.
   async listDnsRecords(token, domainName) {
-    const body = await request(token, `/api/dns/v1/zones/${encodeURIComponent(domainName)}`);
+    // A 404 here means Hostinger holds no zone for this domain — common when a
+    // domain is registered there but its DNS is hosted elsewhere. That is a
+    // fact about the domain, not a failure, so it reads as an empty zone
+    // rather than souring a whole account sync.
+    let body;
+    try {
+      body = await request(token, `/api/dns/v1/zones/${encodeURIComponent(domainName)}`);
+    } catch (err) {
+      if (err.status === 404) return [];
+      throw err;
+    }
     const groups = unwrap(body);
     const flat = [];
     for (const group of groups) {

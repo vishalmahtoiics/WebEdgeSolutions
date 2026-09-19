@@ -7,7 +7,7 @@ import { asyncHandler, badRequest, notFound } from '../lib/errors.js';
 import { encrypt, tokenHint } from '../lib/crypto.js';
 import { getAdapter, listAdapters, tryCapability } from '../providers/index.js';
 import { loadProviderWithToken, publicProvider } from '../services/providerService.js';
-import { syncDomains } from '../services/syncService.js';
+import { syncDomains, syncEverything } from '../services/syncService.js';
 
 export const providersRouter = Router();
 
@@ -153,6 +153,32 @@ providersRouter.post(
       ok: true,
       ...summary,
       message: `Synced ${summary.total} domain${summary.total === 1 ? '' : 's'} — ${summary.imported} added, ${summary.updated} updated${summary.skipped ? `, ${summary.skipped} skipped (added manually)` : ''}.`,
+    });
+  }),
+);
+
+/// One click: domains, then DNS and mailboxes for every domain, all saved
+/// locally. Safe to repeat — nothing is duplicated.
+providersRouter.post(
+  '/:id/sync-all',
+  asyncHandler(async (req, res) => {
+    const summary = await syncEverything(req.params.id);
+    const d = summary.domains;
+
+    const parts = [
+      `${d.total} domain${d.total === 1 ? '' : 's'} (${d.imported} added, ${d.updated} updated${d.skipped ? `, ${d.skipped} skipped` : ''})`,
+      `${summary.dnsRecords} DNS record${summary.dnsRecords === 1 ? '' : 's'}`,
+      `${summary.mailboxes} mailbox${summary.mailboxes === 1 ? '' : 'es'}`,
+    ];
+
+    res.json({
+      ok: true,
+      ...summary,
+      message:
+        `Synced ${parts.join(', ')}.` +
+        (summary.failures.length
+          ? ` ${summary.failures.length} domain${summary.failures.length === 1 ? '' : 's'} had problems.`
+          : ''),
     });
   }),
 );

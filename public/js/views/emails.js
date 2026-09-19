@@ -2,7 +2,8 @@ import { api, el, statusBadge, emptyState, formatMb } from '../core.js';
 import { navigate } from '../app.js';
 
 /// Every mailbox across the domains the signed-in user can reach.
-export async function renderEmails() {
+export async function renderEmails({ user }) {
+  const isAdmin = user.role === 'SUPER_ADMIN';
   const { emails } = await api('/dashboard/my-emails');
 
   const frag = el('div');
@@ -58,7 +59,18 @@ export async function renderEmails() {
           el(
             'table',
             {},
-            el('thead', {}, el('tr', {}, el('th', {}, 'Address'), el('th', {}, 'Status'), el('th', {}, 'Usage'), el('th', {}, 'Source'))),
+            el(
+              'thead',
+              {},
+              el(
+                'tr',
+                {},
+                el('th', {}, 'Address'),
+                el('th', {}, 'Status'),
+                el('th', {}, 'Usage'),
+                isAdmin ? el('th', {}, 'Source') : null,
+              ),
+            ),
             el(
               'tbody',
               {},
@@ -69,7 +81,9 @@ export async function renderEmails() {
                   el('td', { class: 'strong break' }, m.address),
                   el('td', {}, statusBadge(m.status)),
                   el('td', { class: 'small muted' }, m.usedMb != null || m.quotaMb != null ? `${formatMb(m.usedMb)} / ${formatMb(m.quotaMb)}` : '—'),
-                  el('td', {}, el('span', { class: `badge ${m.isFromProvider ? 'accent' : ''}` }, m.isFromProvider ? 'Provider' : 'Manual')),
+                  isAdmin
+                    ? el('td', {}, el('span', { class: `badge ${m.isFromProvider ? 'accent' : ''}` }, m.isFromProvider ? 'Provider' : 'Manual'))
+                    : null,
                 ),
               ),
             ),

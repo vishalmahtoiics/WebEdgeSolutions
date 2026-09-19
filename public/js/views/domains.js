@@ -71,7 +71,7 @@ export async function renderDomains({ user }) {
           'tr',
           { style: 'cursor:pointer', onclick: () => navigate(`domain/${d.id}`) },
           el('td', {}, el('div', { class: 'strong' }, d.name)),
-          el('td', {}, sourceBadge(d.sourceLabel, d.source)),
+          isAdmin ? el('td', {}, sourceBadge(d.sourceLabel, d.source)) : null,
           el('td', {}, statusBadge(d.status)),
           el('td', { class: 'small muted nowrap' }, formatDate(d.expiresAt)),
           el('td', { class: 'small' }, String(d.emailCount)),
@@ -95,7 +95,7 @@ export async function renderDomains({ user }) {
       ),
     );
     if (!list.length) {
-      tbody.append(el('tr', {}, el('td', { colspan: isAdmin ? 7 : 6 }, emptyState('search', 'No matches'))));
+      tbody.append(el('tr', {}, el('td', { colspan: isAdmin ? 7 : 5 }, emptyState('search', 'No matches'))));
     }
   };
 
@@ -128,7 +128,7 @@ export async function renderDomains({ user }) {
               'tr',
               {},
               el('th', {}, 'Domain'),
-              el('th', {}, 'Provider'),
+              isAdmin ? el('th', {}, 'Provider') : null,
               el('th', {}, 'Status'),
               el('th', {}, 'Expires'),
               el('th', {}, 'Emails'),

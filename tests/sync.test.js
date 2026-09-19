@@ -229,7 +229,7 @@ test('a manually added mailbox is kept over the provider copy', async () => {
 test('live provider details are read through for a synced domain', async () => {
   // This domain has no detail route in the stub, so the adapter must report the
   // failure rather than inventing values.
-  const { status, data } = await call(`/domains/${ctx.domainId}/provider-details`);
+  const { status, data } = await call(`/domains/${ctx.domainId}/registration`);
   assert.equal(status, 200);
   assert.equal(data.supported, true);
   assert.equal(data.details, null);

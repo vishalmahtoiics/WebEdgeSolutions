@@ -139,3 +139,74 @@ export async function syncEmailAccounts(domain) {
 
   return { supported: true, count: fresh.length };
 }
+
+/// Refreshes one domain's DNS records and mailboxes from its provider.
+///
+/// Each part is reported separately and a failure in one does not stop the
+/// other: a domain with a DNS zone but no email plan should still get its DNS.
+export async function refreshDomain(domain) {
+  const result = { dns: null, emails: null };
+
+  try {
+    const dns = await syncDnsRecords(domain);
+    result.dns = dns.error ? { ok: false, error: dns.error } : { ok: dns.supported, count: dns.count };
+  } catch (err) {
+    result.dns = { ok: false, error: err.message };
+  }
+
+  try {
+    const emails = await syncEmailAccounts(domain);
+    result.emails = emails.error
+      ? { ok: false, error: emails.error }
+      : { ok: emails.supported, count: emails.count };
+  } catch (err) {
+    result.emails = { ok: false, error: err.message };
+  }
+
+  return result;
+}
+
+/// One action that pulls everything a provider knows into the database:
+/// the domain list first, then DNS and mailboxes for each domain it owns.
+///
+/// Domains are processed one at a time rather than in parallel, to stay
+/// polite to the provider's rate limits. Per-domain failures are collected
+/// rather than thrown, so one broken domain cannot abandon the rest.
+export async function syncEverything(providerId) {
+  const domainSummary = await syncDomains(providerId);
+
+  const domains = await prisma.domain.findMany({
+    where: { providerId, source: 'PROVIDER' },
+    orderBy: { name: 'asc' },
+  });
+
+  const details = [];
+  let dnsRecords = 0;
+  let mailboxes = 0;
+  const failures = [];
+
+  for (const domain of domains) {
+    const result = await refreshDomain(domain);
+    if (result.dns?.ok) dnsRecords += result.dns.count || 0;
+    if (result.emails?.ok) mailboxes += result.emails.count || 0;
+
+    const problems = [result.dns?.error, result.emails?.error].filter(Boolean);
+    if (problems.length) failures.push({ domain: domain.name, problems });
+
+    details.push({
+      domain: domain.name,
+      dnsCount: result.dns?.ok ? result.dns.count : null,
+      emailCount: result.emails?.ok ? result.emails.count : null,
+      problems,
+    });
+  }
+
+  return {
+    domains: domainSummary,
+    domainsProcessed: domains.length,
+    dnsRecords,
+    mailboxes,
+    failures,
+    details,
+  };
+}

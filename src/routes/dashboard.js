@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../db.js';
 import { requireAuth, isAdmin } from '../middleware/auth.js';
 import { asyncHandler } from '../lib/errors.js';
+import { presentEmailAccount } from '../lib/visibility.js';
 
 export const dashboardRouter = Router();
 dashboardRouter.use(requireAuth);
@@ -54,10 +55,7 @@ dashboardRouter.get(
       prisma.domain.findMany({
         where: { id: { in: domainIds } },
         orderBy: { name: 'asc' },
-        include: {
-          provider: { select: { name: true } },
-          _count: { select: { emailAccounts: true } },
-        },
+        include: { _count: { select: { emailAccounts: true } } },
       }),
       prisma.emailAccount.count({ where: { domainId: { in: domainIds } } }),
       prisma.serverResource.findUnique({ where: { userId: req.user.id } }),
@@ -71,11 +69,12 @@ dashboardRouter.get(
         activeDomains: domains.filter((d) => d.status === ACTIVE).length,
       },
       resource,
+      // No provider identity here: a user's own dashboard says nothing about
+      // who hosts their domains.
       domains: domains.map((d) => ({
         id: d.id,
         name: d.name,
         status: d.status,
-        sourceLabel: d.source === 'MANUAL' ? 'Manually Added' : d.provider?.name || 'Provider',
         emailCount: d._count.emailAccounts,
       })),
     });
@@ -104,6 +103,10 @@ dashboardRouter.get(
       orderBy: [{ domain: { name: 'asc' } }, { address: 'asc' }],
       include: { domain: { select: { id: true, name: true } } },
     });
-    res.json({ emails });
+
+    const admin = isAdmin(req.user);
+    res.json({
+      emails: emails.map((m) => ({ ...presentEmailAccount(m, admin), domain: m.domain })),
+    });
   }),
 );

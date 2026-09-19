@@ -222,7 +222,7 @@ test('deleting at the provider removes it from both sides', async () => {
   const { data } = await admin(`/domains/${ctx.domainId}`);
   const mailbox = data.emailAccounts.find((m) => m.address === `support@${DOMAIN}`);
 
-  const res = await admin(`/domains/${ctx.domainId}/emails/${mailbox.id}/provider`, { method: 'DELETE' });
+  const res = await admin(`/domains/${ctx.domainId}/emails/${mailbox.id}/destroy`, { method: 'DELETE' });
   assert.equal(res.status, 200);
   assert.ok(!mailboxes.some((m) => m.address === `support@${DOMAIN}`), 'it should be gone at the provider');
 
@@ -235,7 +235,7 @@ test('a portal-only mailbox cannot be deleted at the provider', async () => {
     method: 'POST',
     body: { address: `manual@${DOMAIN}` },
   });
-  const res = await admin(`/domains/${ctx.domainId}/emails/${created.data.email.id}/provider`, { method: 'DELETE' });
+  const res = await admin(`/domains/${ctx.domainId}/emails/${created.data.email.id}/destroy`, { method: 'DELETE' });
   assert.equal(res.status, 400);
   assert.match(res.data.error, /only exists in the portal/);
 });

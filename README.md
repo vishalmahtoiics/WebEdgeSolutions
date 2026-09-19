@@ -142,8 +142,10 @@ Point your platform's health check at `/api/health`, which returns
    token (hPanel → Account → API). The token is encrypted before it is stored.
 2. **Test Connection** — calls the provider's API and reports success or the
    exact failure. The **Sync Domains** button unlocks only after a test passes.
-3. **Sync Domains** — imports domains into the local database. Safe to run as
-   often as you like: domains are matched by name, so nothing is duplicated.
+3. **Sync Everything** — one click: imports domains, then the DNS zone and
+   mailboxes for each one, all saved locally. **Sync Domains** does the domain
+   list alone. Both are safe to repeat — domains are matched by name, so
+   nothing is duplicated.
 4. **Domains → Manage** — per-domain tabs for information, DNS records,
    mailboxes, and FTP/server details.
 5. **Users** — create users, assign them specific domains, and set their
@@ -240,6 +242,28 @@ allocations.
 the backend on every domain-scoped route, so changing an id in the URL returns
 `404` rather than another user's data. Disabling an account revokes access
 immediately, including any session already signed in.
+
+### Users never see the provider
+
+The portal is white-label for normal users. They see their domains, DNS and
+mailboxes as facts about their own service — never which hosting company is
+behind them, and never which rows came from an API rather than being typed in.
+
+That is enforced in the API responses, not by hiding things in the browser:
+a user reading the network tab learns nothing either. For a non-admin every
+response omits the provider name, the adapter key, `sourceLabel`, `source`,
+`isFromProvider` and the upstream record ids. Endpoint paths are named for what
+they return rather than where the data comes from, and the Provider/Manual
+columns are gone.
+
+Instead of "Load from provider", a user gets one **Refresh** button per domain,
+which reloads its DNS records and mailboxes. A test asserts that no response a
+user can reach contains the provider's name.
+
+> One honest limit: real DNS record *values* are shown as they are. If a
+> domain's MX record points at `mx1.hostinger.com`, the user sees that — it is
+> their own DNS data, and altering it would make the portal lie about their
+> zone.
 
 ---
 
