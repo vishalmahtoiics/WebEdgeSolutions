@@ -46,7 +46,7 @@ test('a rejected ENCRYPTION_KEY reports the length it actually received', () => 
   const out = startWith({ DATABASE_URL: DB, SESSION_SECRET: 'x', ENCRYPTION_KEY: 'a'.repeat(61) });
   assert.match(out, /received 61 characters/);
   assert.match(out, /3 too few/);
-  assert.match(out, /Redeploy \(not Restart\)/, 'should point at the stale-variable case');
+  assert.match(out, /Redeploy, not Restart/, 'should point at the stale-variable case');
   assert.doesNotMatch(out, /a{20}/, 'the key itself must never be printed');
 });
 
