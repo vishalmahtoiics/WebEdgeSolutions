@@ -40,6 +40,35 @@ test('entrypoint rejects an ENCRYPTION_KEY that is not 64 hex characters', () =>
   assert.match(out, /openssl rand -hex 32/, 'the message should say how to generate one');
 });
 
+test('a rejected ENCRYPTION_KEY reports the length it actually received', () => {
+  // In a restart loop the same message repeats whether the variable is stale or
+  // simply wrong, so the observed length is the only way to tell them apart.
+  const out = startWith({ DATABASE_URL: DB, SESSION_SECRET: 'x', ENCRYPTION_KEY: 'a'.repeat(61) });
+  assert.match(out, /received 61 characters/);
+  assert.match(out, /3 too few/);
+  assert.match(out, /Redeploy \(not Restart\)/, 'should point at the stale-variable case');
+  assert.doesNotMatch(out, /a{20}/, 'the key itself must never be printed');
+});
+
+test('a 64-character key containing non-hex characters says so', () => {
+  const out = startWith({ DATABASE_URL: DB, SESSION_SECRET: 'x', ENCRYPTION_KEY: 'z'.repeat(64) });
+  assert.match(out, /received 64 characters/);
+  assert.match(out, /64 of them are not hexadecimal/);
+});
+
+test('a valid key survives a trailing newline and wrapping quotes', () => {
+  const key = 'a'.repeat(64);
+  for (const [label, value] of [
+    ['trailing newline', `${key}\n`],
+    ['leading and trailing spaces', `  ${key}  `],
+    ['wrapping double quotes', `"${key}"`],
+    ["wrapping single quotes", `'${key}'`],
+  ]) {
+    const out = startWith({ DATABASE_URL: DB, SESSION_SECRET: 'x', ENCRYPTION_KEY: value }, 9000);
+    assert.doesNotMatch(out, /ENCRYPTION_KEY is not valid/, `${label} should be tolerated`);
+  }
+});
+
 test('an unreachable database is diagnosed on the first attempt, then retried', () => {
   // Port 1 is closed. A container platform restarts a process that exits, so
   // the reason must appear immediately — not only after the retries run out,

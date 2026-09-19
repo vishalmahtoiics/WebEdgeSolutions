@@ -14,6 +14,7 @@
 // several replicas and migrating separately.
 
 import { spawnSync } from 'node:child_process';
+import { cleanEnv } from '../src/lib/env.js';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +25,12 @@ function fail(message, detail) {
   console.error(`\n  ✕ ${message}\n`);
   if (detail) console.error(`  ${detail}\n`);
   process.exit(1);
+}
+
+// Normalise every value up front — a pasted secret often carries a trailing
+// newline or wrapping quotes — so the rest of the process sees clean values.
+for (const name of ['DATABASE_URL', 'SESSION_SECRET', 'ENCRYPTION_KEY', 'ADMIN_EMAIL', 'ADMIN_PASSWORD', 'ADMIN_NAME', 'PORT', 'SECURE_COOKIES']) {
+  if (process.env[name] !== undefined) process.env[name] = cleanEnv(process.env[name]);
 }
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -37,10 +44,29 @@ for (const name of ['SESSION_SECRET', 'ENCRYPTION_KEY']) {
   }
 }
 
-if (!/^[0-9a-fA-F]{64}$/.test(process.env.ENCRYPTION_KEY)) {
+// Say what actually arrived, never the value itself. Without the observed
+// length there is no way to tell a stale variable from a mistyped one, which
+// matters most in a restart loop where the same message repeats either way.
+const key = process.env.ENCRYPTION_KEY;
+if (!/^[0-9a-fA-F]{64}$/.test(key)) {
+  const nonHex = [...key].filter((c) => !/[0-9a-fA-F]/.test(c)).length;
+
+  let problem;
+  if (key.length !== 64) {
+    const diff = Math.abs(64 - key.length);
+    problem =
+      `received ${key.length} characters — ${diff} too ${key.length < 64 ? 'few' : 'many'}`;
+  } else {
+    problem = `received 64 characters, but ${nonHex} of them ${nonHex === 1 ? 'is' : 'are'} not hexadecimal`;
+  }
+
   fail(
-    'ENCRYPTION_KEY must be exactly 64 hexadecimal characters (32 bytes).',
-    'Generate one with: openssl rand -hex 32',
+    'ENCRYPTION_KEY is not valid.',
+    `Expected exactly 64 hexadecimal characters (0-9, a-f).\n` +
+      `  Actually ${problem}.\n\n` +
+      '  If that length is not what you just saved, the container is still running with the\n' +
+      '  old value — save the variable and use Redeploy (not Restart) so it is picked up.\n\n' +
+      '  Generate a new one with: openssl rand -hex 32',
   );
 }
 
