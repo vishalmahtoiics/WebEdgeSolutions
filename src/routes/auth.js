@@ -5,7 +5,8 @@ import rateLimit from 'express-rate-limit';
 import { prisma } from '../db.js';
 import { validate } from '../middleware/validate.js';
 import { requireAuth } from '../middleware/auth.js';
-import { asyncHandler, unauthorized } from '../lib/errors.js';
+import { asyncHandler, unauthorized, HttpError } from '../lib/errors.js';
+import { config } from '../config.js';
 
 export const authRouter = Router();
 
@@ -37,6 +38,19 @@ authRouter.post(
 
     if (!user || !ok) throw unauthorized('Incorrect email or password.');
     if (!user.isActive) throw unauthorized('This account has been disabled.');
+
+    // A Secure cookie sent over plain HTTP is silently discarded by the
+    // browser: the sign-in would return 200 and then bounce straight back to
+    // the login screen with nothing to explain why. `req.secure` honours
+    // X-Forwarded-Proto because the app trusts the first proxy hop.
+    if (config.secureCookies && !req.secure) {
+      throw new HttpError(
+        500,
+        'This server is set to issue HTTPS-only cookies (SECURE_COOKIES=true), but the request ' +
+          'arrived over HTTP, so the session cookie would be discarded. Serve the site over HTTPS, ' +
+          'or set SECURE_COOKIES=false.',
+      );
+    }
 
     // Prevent session fixation: start a fresh session on every sign-in.
     await new Promise((resolve, reject) =>

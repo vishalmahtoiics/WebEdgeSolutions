@@ -55,6 +55,66 @@ psql -c "ALTER ROLE hostportal CREATEDB;"   # only needed for `prisma migrate de
 
 ---
 
+## Deploying (Coolify, Railway, Render, Docker)
+
+These platforms build with `npm ci` and then run `npm start` — there is no
+separate release step. So `npm start` does the whole job: it waits for the
+database, applies migrations, ensures a Super Admin exists, and then serves.
+All three steps are safe to repeat on every restart.
+
+Use `npm run start:server` instead if you handle migrations yourself, or set
+`SKIP_MIGRATIONS=true`.
+
+### Coolify, step by step
+
+1. **Create a PostgreSQL database** in your Coolify project. Copy its
+   connection string.
+2. **Create an Application** from this repository and pick the branch to
+   deploy. Coolify detects Node.js via Nixpacks; the `nixpacks.toml` in this
+   repo adds the Prisma client generation step.
+3. **Set the environment variables** below, then deploy.
+4. **Open the app and sign in** with `ADMIN_EMAIL` / `ADMIN_PASSWORD`, then
+   change the password from **Settings**.
+
+### Required environment variables
+
+| Variable | Value |
+| --- | --- |
+| `DATABASE_URL` | The connection string from step 1. Use the database's **service name** as the host, not `localhost`. |
+| `SESSION_SECRET` | `openssl rand -hex 32` |
+| `ENCRYPTION_KEY` | `openssl rand -hex 32` — must be exactly 64 hex characters. |
+| `ADMIN_EMAIL` | The first Super Admin's email. |
+| `ADMIN_PASSWORD` | Their initial password — change it after signing in. |
+| `SECURE_COOKIES` | `true` if the site is served over **https**, `false` if over **http**. See below. |
+| `PORT` | Optional; most platforms set this for you. |
+
+Mark these **Runtime** variables. Coolify warns if `NODE_ENV=production` is
+also available at build time, because it can skip devDependencies — this app
+does not need devDependencies to build, but leaving `NODE_ENV` runtime-only
+avoids the warning.
+
+### Two things that commonly go wrong
+
+**"Something went wrong. Please try again." when signing in.**
+Almost always an un-migrated database: the `users` table does not exist yet.
+Check the container log — it will say so and name the fix. If your platform
+runs `node src/server.js` directly, change the start command to `npm start`
+so migrations run first.
+
+**Sign-in appears to do nothing, with no error.**
+`SECURE_COOKIES=true` while the site is served over plain `http://`. The
+browser discards a `Secure` cookie on an insecure connection, so the session
+never sticks. The app now returns an explicit error saying exactly this
+instead of failing silently. Either enable HTTPS or set `SECURE_COOKIES=false`.
+
+### Health check
+
+Point your platform's health check at `/api/health`, which returns
+`{"ok":true}` without touching the database.
+
+
+---
+
 ## Environment variables
 
 | Variable | Required | Description |
@@ -65,7 +125,8 @@ psql -c "ALTER ROLE hostportal CREATEDB;"   # only needed for `prisma migrate de
 | `PORT` | no | Defaults to `3000`. |
 | `NODE_ENV` | no | Set to `production` when deploying. |
 | `SECURE_COOKIES` | no | Set to `true` when serving over HTTPS. |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NAME` | no | Used once by `npm run seed`. |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NAME` | no | Used to create the first Super Admin on seed/first boot. |
+| `SKIP_MIGRATIONS` | no | Set to `true` to stop `npm start` applying migrations and seeding. |
 
 `npm run setup` generates real random values for `SESSION_SECRET` and
 `ENCRYPTION_KEY` the first time it runs.
@@ -184,7 +245,8 @@ prisma/
   schema.prisma        Database schema
   seed.js              Creates the first Super Admin
 scripts/
-  setup.js             One-command setup
+  setup.js             One-command local setup
+  start.js             Production entrypoint: waits for DB, migrates, seeds
 src/
   server.js            Express app and middleware
   config.js            Environment configuration
@@ -206,7 +268,8 @@ tests/                 Test suites
 | --- | --- |
 | `npm run setup` | Full first-time setup. |
 | `npm run dev` | Start with auto-reload. |
-| `npm start` | Start normally. |
+| `npm start` | Production start: waits for the database, migrates, seeds, then serves. |
+| `npm run start:server` | Start the server only, without migrating or seeding. |
 | `npm test` | Run the test suites. |
 | `npm run seed` | Create the Super Admin (idempotent). |
 | `npm run migrate` | Create and apply a migration. |

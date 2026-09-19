@@ -1,0 +1,13 @@
+# Build configuration for Nixpacks-based platforms (Coolify, Railway, …).
+#
+# The auto-detected plan installs dependencies and runs `npm start`, with no
+# release step. `npm start` therefore applies migrations itself — see
+# scripts/start.js. Generating the Prisma client is pinned here so the build
+# never depends on postinstall hooks being enabled.
+
+[phases.build]
+dependsOn = ["install"]
+cmds = ["npx prisma generate"]
+
+[start]
+cmd = "npm run start"

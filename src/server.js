@@ -88,12 +88,43 @@ app.use((err, _req, res, _next) => {
   if (err?.status && err.status < 500) {
     return res.status(err.status).json({ error: err.message });
   }
+  // Turn the two Prisma failures that actually strand a deployment into an
+  // instruction, so the container log says what to do rather than just what
+  // broke. The client still gets the generic message.
+  if (err?.code === 'P2021' || err?.code === 'P2022') {
+    console.error(
+      '[error] The database schema is missing or out of date. ' +
+        'Run `npx prisma migrate deploy` against DATABASE_URL, or start the app with `npm start`, ' +
+        'which applies migrations before serving.',
+    );
+  } else if (err?.code === 'P1001' || err?.code === 'P1000') {
+    console.error(
+      '[error] Could not reach the database. Check DATABASE_URL — inside Docker the host must be ' +
+        'the database service name, not localhost.',
+    );
+  }
+
   console.error('[error]', err);
   res.status(500).json({ error: 'Something went wrong. Please try again.' });
 });
 
 const server = app.listen(config.port, () => {
-  console.log(`\n  Hosting portal running at http://localhost:${config.port}\n`);
+  console.log(`\n  Hosting portal running on port ${config.port}\n`);
+});
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(
+      `\n  ✕ Port ${config.port} is already in use.\n\n` +
+        '  Set PORT to a free port, or stop the process already listening on it.\n',
+    );
+    process.exit(1);
+  }
+  if (err.code === 'EACCES') {
+    console.error(`\n  ✕ Not allowed to bind port ${config.port}. Use a port above 1024.\n`);
+    process.exit(1);
+  }
+  throw err;
 });
 
 async function shutdown(signal) {
