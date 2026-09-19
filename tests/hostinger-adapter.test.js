@@ -37,10 +37,12 @@ const FIXTURES = {
     { name: '@', type: 'MX', ttl: 3600, records: [{ content: 'mx1.example.com', isDisabled: false }, { content: 'mx2.example.com', isDisabled: false }] },
   ],
   '/api/mail/v1/orders': { data: [{ id: 'ord_1', status: 'active', seats: 3, domain: { domain: 'example.com' } }] },
+  // Usage is reported as storageUsed/storageQuota in KILOBYTES, per
+  // MailV1MailboxesMailboxUsageResource — not bytes.
   '/api/mail/v1/orders/ord_1/mailboxes': {
     data: [
-      { id: 'mb_1', address: 'info@example.com', status: 'active', usage: { quota: 10737418240, used: 1073741824 } },
-      { id: 'mb_2', address: 'support@example.com', status: 'active', usage: { quota: 10737418240, used: 0 } },
+      { id: 'mb_1', address: 'info@example.com', status: 'active', usage: { storageQuota: 10485760, storageUsed: 1048576, messagesUsed: 42, messagesQuota: 10000 } },
+      { id: 'mb_2', address: 'support@example.com', status: 'active', usage: { storageQuota: 10485760, storageUsed: 0 } },
     ],
   },
   '/api/vps/v1/virtual-machines': [
@@ -129,9 +131,11 @@ test('listDnsRecords flattens grouped zone records into one row per value', asyn
 test('listEmailAccounts resolves the mail order for the domain', async () => {
   const mailboxes = await adapter.listEmailAccounts(TOKEN, 'example.com');
   assert.deepEqual(mailboxes.map((m) => m.address), ['info@example.com', 'support@example.com']);
-  // Bytes are converted to megabytes for storage.
-  assert.equal(mailboxes[0].quotaMb, 10240);
-  assert.equal(mailboxes[0].usedMb, 1024);
+  // Kilobytes are converted to megabytes for storage.
+  assert.equal(mailboxes[0].quotaMb, 10240, '10 GB quota should read as 10240 MB');
+  assert.equal(mailboxes[0].usedMb, 1024, '1 GB used should read as 1024 MB');
+  assert.equal(mailboxes[0].messagesUsed, 42);
+  assert.equal(mailboxes[1].usedMb, 0, 'zero usage must stay 0, not become null');
 });
 
 test('listEmailAccounts returns an empty list when a domain has no mail order', async () => {

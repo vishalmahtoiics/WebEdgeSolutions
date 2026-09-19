@@ -175,6 +175,9 @@ Each adapter declares what it can do, and the UI adapts. For Hostinger:
 | Domain details | yes | `GET /api/domains/v1/portfolio/{domain}` |
 | DNS records | yes | `GET /api/dns/v1/zones/{domain}` |
 | Email accounts | yes | `GET /api/mail/v1/orders` → `GET /api/mail/v1/orders/{orderId}/mailboxes` |
+| Create / delete mailbox | yes | `POST` / `DELETE /api/mail/v1/mailboxes` — **changes the real account** |
+| Change mailbox password | yes | `PATCH /api/mail/v1/mailboxes/{id}/password` |
+| Forwarders, aliases, auto-replies, catch-all | read only | `GET /api/mail/v1/orders/{orderId}/…` |
 | Servers (VPS) | yes | `GET /api/vps/v1/virtual-machines` |
 | FTP / FTPS credentials | **no** | Not exposed by the API — configure manually per domain. |
 
@@ -190,6 +193,41 @@ Reference: [Hostinger API documentation](https://docs.hostinger.com/api-referenc
 
 Unimplemented methods degrade gracefully — the relevant panel falls back to
 manual entry instead of erroring.
+
+---
+
+## Email management
+
+Under **Domains → Manage → Emails** you can:
+
+- **Create Mailbox** — creates a real mailbox on the hosting account. The local
+  record is written only after the provider confirms, so the portal never lists
+  a mailbox that does not exist.
+- **Password** — sets a new mailbox password at the provider. The portal never
+  stores mailbox passwords.
+- **Track Manually** — records a mailbox that the portal should know about
+  without touching the provider, for domains with no API-managed email.
+
+Forwarders, aliases, auto-replies and the catch-all are read live from the
+provider and shown read-only; they are managed in the provider's own panel.
+
+### Two kinds of delete
+
+These are deliberately separate, because they are very different acts:
+
+| Action | Effect |
+| --- | --- |
+| **Remove from portal only** | Deletes the portal's record. The mailbox and its mail are untouched at the provider. |
+| **Delete permanently** | Destroys the mailbox and every message in it at the provider. Requires typing the full address to confirm. Cannot be undone. |
+
+A mailbox that exists only in the portal cannot be deleted at the provider —
+the API rejects it rather than guessing what was meant.
+
+Users can manage mailboxes on the domains assigned to them, and only those.
+
+> Mailbox usage is reported by Hostinger as `storageUsed` / `storageQuota` in
+> **kilobytes**, and is converted to MB/GB for display.
+
 
 ---
 

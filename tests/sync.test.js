@@ -32,10 +32,12 @@ const routes = () => ({
     { name: 'www', type: 'CNAME', ttl: 3600, records: [{ content: D1, isDisabled: false }] },
   ],
   '/api/mail/v1/orders': { data: [{ id: 'ord_9', status: 'active', seats: 2, domain: { domain: D1 } }] },
+  // Usage is storageUsed/storageQuota in kilobytes, per Hostinger's
+  // MailV1MailboxesMailboxUsageResource.
   '/api/mail/v1/orders/ord_9/mailboxes': {
     data: [
-      { id: 'mb_a', address: `info@${D1}`, status: 'active', usage: { quota: 5368709120, used: 0 } },
-      { id: 'mb_b', address: `admin@${D1}`, status: 'active', usage: { quota: 5368709120, used: 0 } },
+      { id: 'mb_a', address: `info@${D1}`, status: 'active', usage: { storageQuota: 5242880, storageUsed: 0 } },
+      { id: 'mb_b', address: `admin@${D1}`, status: 'active', usage: { storageQuota: 5242880, storageUsed: 0 } },
     ],
   },
 });

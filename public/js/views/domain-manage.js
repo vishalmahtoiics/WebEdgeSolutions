@@ -323,7 +323,7 @@ function dnsPanel(data, isAdmin) {
           'div',
           { class: 'card-body' },
           emptyState(
-            '🧭',
+            'dns',
             'No DNS records',
             canSync ? 'Click "Load from provider" to import the live zone.' : 'Add a record to get started.',
           ),
@@ -389,6 +389,9 @@ function dnsModal(domainId, record = null) {
 function emailPanel(data, isAdmin) {
   const d = data.domain;
   const canSync = Boolean(d.provider) && data.capabilities?.email;
+  // Creating, deleting and re-passwording mailboxes act on the real hosting
+  // account, so they only appear when the provider actually supports them.
+  const canWrite = Boolean(d.provider) && data.capabilities?.emailWrite;
 
   const syncBtn = el('button', { class: 'btn' }, 'Load from provider');
   syncBtn.onclick = async () => {
@@ -420,29 +423,21 @@ function emailPanel(data, isAdmin) {
         { class: 'actions' },
         el('button', { class: 'btn sm', onclick: () => emailModal(d.id, m) }, 'Edit'),
         ' ',
-        el(
-          'button',
-          {
-            class: 'btn sm danger',
-            onclick: () =>
-              confirmModal({
-                title: 'Remove mailbox',
-                message: `Remove ${m.address} from the portal? The mailbox itself is not deleted at the provider.`,
-                confirmLabel: 'Remove',
-                onConfirm: async () => {
-                  await api(`/domains/${d.id}/emails/${m.id}`, { method: 'DELETE' });
-                  toast('Mailbox removed.', 'ok');
-                  refresh();
-                },
-              }),
-          },
-          'Remove',
-        ),
+        // Password and provider deletion only mean anything for a mailbox that
+        // actually exists at the provider.
+        canWrite && m.externalId
+          ? [
+              el('button', { class: 'btn sm', onclick: () => passwordModal(d.id, m) }, 'Password'),
+              ' ',
+            ]
+          : null,
+        el('button', { class: 'btn sm danger', onclick: () => deleteMailboxModal(d, m, canWrite) }, 'Delete'),
       ),
     ),
   );
 
-  return el(
+  const panel = el('div');
+  const mailboxCard = el(
     'div',
     { class: 'card' },
     el(
@@ -461,7 +456,10 @@ function emailPanel(data, isAdmin) {
         ),
       ),
       canSync ? syncBtn : null,
-      el('button', { class: 'btn primary', onclick: () => emailModal(d.id) }, '+ Add Email'),
+      el('button', { class: 'btn', onclick: () => emailModal(d.id) }, '+ Track Manually'),
+      canWrite
+        ? el('button', { class: 'btn primary', onclick: () => createMailboxModal(d) }, '+ Create Mailbox')
+        : null,
     ),
     data.emailAccounts.length
       ? el(
@@ -490,7 +488,7 @@ function emailPanel(data, isAdmin) {
           'div',
           { class: 'card-body' },
           emptyState(
-            '✉',
+            'mail',
             'No mailboxes listed',
             canSync
               ? 'Click "Load from provider", or add a mailbox manually if the provider has no email plan for this domain.'
@@ -498,6 +496,230 @@ function emailPanel(data, isAdmin) {
           ),
         ),
   );
+
+  panel.append(mailboxCard);
+  if (d.provider && data.capabilities?.emailExtras) panel.append(emailExtrasCard(d));
+  return panel;
+}
+
+/// Forwarders, aliases, autoreplies and catch-alls, read live from the
+/// provider. Read-only here: they are managed in the provider's own panel, and
+/// showing them beats pretending they do not exist.
+function emailExtrasCard(domain) {
+  const body = el('div', { class: 'card-body' }, el('div', { class: 'muted small' }, 'Loading…'));
+
+  api(`/domains/${domain.id}/emails/extras`)
+    .then(({ supported, extras, error }) => {
+      clear(body);
+      if (!supported) return body.append(el('div', { class: 'muted small' }, 'Not available for this provider.'));
+      if (error) return body.append(el('div', { class: 'alert error', style: 'margin:0' }, error));
+
+      const sections = [
+        ['Forwarders', extras.forwarders, (f) => `${f.mailbox} → ${f.destination}`, (f) => (f.isConfirmed === false ? 'Pending confirmation' : null)],
+        ['Aliases', extras.aliases, (a) => `${a.address} → ${a.mailbox}`, () => null],
+        ['Auto-replies', extras.autoreplies, (r) => `${r.mailbox}${r.subject ? ` — ${r.subject}` : ''}`, (r) => (r.endsAt ? `until ${formatDate(r.endsAt)}` : null)],
+        ['Catch-all', extras.catchalls, (c) => `${c.domain || domain.name} → ${c.mailbox}`, (c) => (c.isConfirmed === false ? 'Pending confirmation' : null)],
+      ].filter(([, list]) => Array.isArray(list) && list.length);
+
+      if (!sections.length) {
+        return body.append(
+          emptyState('mail', 'None configured', 'No forwarders, aliases, auto-replies or catch-all are set for this domain.'),
+        );
+      }
+
+      body.append(
+        ...sections.map(([label, list, describe, note]) =>
+          el(
+            'div',
+            { style: 'margin-bottom:18px' },
+            el('div', { class: 'strong small', style: 'margin-bottom:8px' }, `${label} (${list.length})`),
+            el(
+              'dl',
+              { class: 'dl' },
+              list.map((item) =>
+                el(
+                  'div',
+                  {},
+                  el('dt', { class: 'mono break' }, describe(item)),
+                  el('dd', { class: 'small muted' }, note(item) || (item.isActive === false ? 'Inactive' : 'Active')),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    })
+    .catch((err) => clear(body).append(el('div', { class: 'alert error', style: 'margin:0' }, err.message)));
+
+  return el(
+    'div',
+    { class: 'card' },
+    el(
+      'div',
+      { class: 'card-head' },
+      el(
+        'div',
+        { class: 'grow' },
+        el('h2', {}, 'Forwarders, aliases & auto-replies'),
+        el('p', {}, "Read live from the provider. Manage these in the provider's own panel."),
+      ),
+    ),
+    body,
+  );
+}
+
+/// Creates a real mailbox on the hosting account.
+function createMailboxModal(domain) {
+  const localPart = el('input', { type: 'text', placeholder: 'info' });
+  const password = el('input', { type: 'password', autocomplete: 'new-password' });
+  const confirm = el('input', { type: 'password', autocomplete: 'new-password' });
+  const alertHost = el('div');
+  const save = el('button', { class: 'btn primary' }, 'Create mailbox');
+
+  save.onclick = submitHandler(save, alertHost, async () => {
+    const local = localPart.value.trim().toLowerCase();
+    if (!local) throw new Error('Enter the part before the @.');
+    if (password.value !== confirm.value) throw new Error('The passwords do not match.');
+
+    const res = await api(`/domains/${domain.id}/emails/provision`, {
+      method: 'POST',
+      body: { address: `${local}@${domain.name}`, password: password.value },
+    });
+    toast(res.message, 'ok');
+    close();
+    refresh();
+  });
+
+  const close = openModal({
+    title: 'Create mailbox',
+    render: () =>
+      el(
+        'div',
+        {},
+        alertHost,
+        el(
+          'div',
+          { class: 'alert warn' },
+          'This creates a real mailbox on ',
+          el('strong', {}, domain.provider?.name || 'the provider'),
+          ', not just a record in this portal.',
+        ),
+        el(
+          'div',
+          { class: 'field' },
+          el('label', {}, 'Address'),
+          el(
+            'div',
+            { style: 'display:flex;align-items:center;gap:8px' },
+            localPart,
+            el('span', { class: 'muted nowrap' }, `@${domain.name}`),
+          ),
+        ),
+        field('Password', password, 'At least 8 characters, with upper and lower case, a number and a symbol.'),
+        field('Confirm password', confirm),
+      ),
+    footer: (closeFn) => [el('button', { class: 'btn', onclick: closeFn }, 'Cancel'), save],
+  });
+}
+
+/// Sets a new password at the provider. Nothing is stored in the portal.
+function passwordModal(domainId, mailbox) {
+  const password = el('input', { type: 'password', autocomplete: 'new-password' });
+  const confirm = el('input', { type: 'password', autocomplete: 'new-password' });
+  const alertHost = el('div');
+  const save = el('button', { class: 'btn primary' }, 'Change password');
+
+  save.onclick = submitHandler(save, alertHost, async () => {
+    if (password.value !== confirm.value) throw new Error('The passwords do not match.');
+    const res = await api(`/domains/${domainId}/emails/${mailbox.id}/password`, {
+      method: 'POST',
+      body: { password: password.value },
+    });
+    toast(res.message, 'ok');
+    close();
+  });
+
+  const close = openModal({
+    title: `Password for ${mailbox.address}`,
+    render: () =>
+      el(
+        'div',
+        {},
+        alertHost,
+        el('p', { class: 'muted small', style: 'margin-top:0' }, 'The new password takes effect immediately. The portal does not keep a copy.'),
+        field('New password', password, 'At least 8 characters, with upper and lower case, a number and a symbol.'),
+        field('Confirm password', confirm),
+      ),
+    footer: (closeFn) => [el('button', { class: 'btn', onclick: closeFn }, 'Cancel'), save],
+  });
+}
+
+/// Deleting a portal record and destroying a real mailbox are very different
+/// acts, so they are presented as an explicit choice rather than one button
+/// whose meaning depends on context.
+function deleteMailboxModal(domain, mailbox, canWrite) {
+  const atProvider = canWrite && Boolean(mailbox.externalId);
+  const alertHost = el('div');
+
+  const removeLocal = el('button', { class: 'btn' }, 'Remove from portal only');
+  removeLocal.onclick = submitHandler(removeLocal, alertHost, async () => {
+    await api(`/domains/${domain.id}/emails/${mailbox.id}`, { method: 'DELETE' });
+    toast('Removed from the portal. The mailbox itself is untouched.', 'ok');
+    close();
+    refresh();
+  });
+
+  // Typing the address is a deliberate speed bump: this destroys real mail.
+  const confirmText = el('input', { type: 'text', placeholder: mailbox.address, autocomplete: 'off' });
+  const destroy = el('button', { class: 'btn danger', disabled: true }, 'Delete permanently');
+  confirmText.oninput = () => {
+    destroy.disabled = confirmText.value.trim().toLowerCase() !== mailbox.address.toLowerCase();
+  };
+  destroy.onclick = submitHandler(destroy, alertHost, async () => {
+    const res = await api(`/domains/${domain.id}/emails/${mailbox.id}/provider`, { method: 'DELETE' });
+    toast(res.message, 'ok');
+    close();
+    refresh();
+  });
+
+  const close = openModal({
+    title: `Delete ${mailbox.address}`,
+    render: () =>
+      el(
+        'div',
+        {},
+        alertHost,
+        !atProvider
+          ? el(
+              'p',
+              { class: 'muted', style: 'margin-top:0' },
+              'This mailbox exists only as a record in this portal, so removing it changes nothing at the provider.',
+            )
+          : el(
+              'div',
+              {},
+              el(
+                'p',
+                { style: 'margin-top:0' },
+                'This mailbox exists at ',
+                el('strong', {}, domain.provider?.name || 'the provider'),
+                '. Choose what should happen:',
+              ),
+              el(
+                'div',
+                { class: 'alert danger', style: 'background:#fdeceb;color:#c02626;border-color:#f5cecb' },
+                el('strong', {}, 'Delete permanently'),
+                ' destroys the mailbox and every message in it at the provider. This cannot be undone.',
+              ),
+              field('Type the address to confirm permanent deletion', confirmText),
+            ),
+      ),
+    footer: (closeFn) => [
+      el('button', { class: 'btn ghost', onclick: closeFn }, 'Cancel'),
+      atProvider ? removeLocal : null,
+      atProvider ? destroy : el('button', { class: 'btn danger', onclick: () => removeLocal.click() }, 'Remove'),
+    ],
+  });
 }
 
 function emailModal(domainId, mailbox = null) {

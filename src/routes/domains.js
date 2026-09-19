@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../db.js';
 import { validate } from '../middleware/validate.js';
 import { requireAuth, requireAdmin, getAccessibleDomain, isAdmin } from '../middleware/auth.js';
-import { asyncHandler, badRequest, notFound } from '../lib/errors.js';
+import { asyncHandler, badRequest, notFound, HttpError } from '../lib/errors.js';
 import { getAdapter, tryCapability } from '../providers/index.js';
 import { loadProviderWithToken } from '../services/providerService.js';
 import { syncDnsRecords, syncEmailAccounts } from '../services/syncService.js';
@@ -348,6 +348,142 @@ domainsRouter.delete(
     if (!existing) throw notFound('Mailbox not found.');
     await prisma.emailAccount.delete({ where: { id: existing.id } });
     res.json({ ok: true });
+  }),
+);
+
+/// Creates a mailbox. With `createAtProvider` the mailbox is created on the
+/// real hosting account first; the local row is only written once the provider
+/// has confirmed it, so the portal never claims a mailbox that does not exist.
+const createEmailSchema = emailSchema.extend({
+  password: z.string().min(8, 'Mailbox password must be at least 8 characters.').optional(),
+});
+
+domainsRouter.post(
+  '/:id/emails/provision',
+  withDomain({ provider: true }),
+  validate(createEmailSchema),
+  asyncHandler(async (req, res) => {
+    const domain = req.domain;
+    const { address, password } = req.body;
+
+    if (!address.toLowerCase().endsWith(`@${domain.name.toLowerCase()}`)) {
+      throw badRequest(`The address must end with @${domain.name}.`);
+    }
+    if (!password) throw badRequest('A password is required to create a mailbox at the provider.');
+    if (!domain.providerId) throw badRequest('This domain is not linked to a provider.');
+
+    const exists = await prisma.emailAccount.findUnique({
+      where: { domainId_address: { domainId: domain.id, address } },
+    });
+    if (exists) throw badRequest('That mailbox is already listed for this domain.');
+
+    const { adapter, token } = await loadProviderWithToken(domain.providerId);
+    if (typeof adapter.createMailbox !== 'function' || !adapter.capabilities?.emailWrite) {
+      throw badRequest('This provider does not support creating mailboxes through its API.');
+    }
+
+    const localPart = address.slice(0, address.lastIndexOf('@'));
+    let created;
+    try {
+      created = await adapter.createMailbox(token, domain.name, { localPart, password });
+    } catch (err) {
+      // Pass the provider's own wording through — it names the rule that failed.
+      throw new HttpError(err.status && err.status < 500 ? 400 : 502, err.message);
+    }
+
+    const email = await prisma.emailAccount.create({
+      data: {
+        domainId: domain.id,
+        address: created.address || address,
+        status: created.status || 'active',
+        externalId: created.externalId ?? null,
+        quotaMb: created.quotaMb ?? null,
+        usedMb: created.usedMb ?? null,
+        isFromProvider: true,
+      },
+    });
+
+    res.status(201).json({ email, message: `${email.address} created at the provider.` });
+  }),
+);
+
+/// Changes a mailbox password at the provider. Nothing is stored locally —
+/// the portal never holds mailbox passwords.
+domainsRouter.post(
+  '/:id/emails/:emailId/password',
+  withDomain({ provider: true }),
+  validate(z.object({ password: z.string().min(8, 'Password must be at least 8 characters.') })),
+  asyncHandler(async (req, res) => {
+    const mailbox = await prisma.emailAccount.findFirst({
+      where: { id: req.params.emailId, domainId: req.domain.id },
+    });
+    if (!mailbox) throw notFound('Mailbox not found.');
+    if (!mailbox.externalId || !req.domain.providerId) {
+      throw badRequest('This mailbox only exists in the portal, so it has no provider password to change.');
+    }
+
+    const { adapter, token } = await loadProviderWithToken(req.domain.providerId);
+    if (typeof adapter.changeMailboxPassword !== 'function') {
+      throw badRequest('This provider does not support changing mailbox passwords.');
+    }
+
+    try {
+      await adapter.changeMailboxPassword(token, mailbox.externalId, req.body.password);
+    } catch (err) {
+      throw new HttpError(err.status && err.status < 500 ? 400 : 502, err.message);
+    }
+
+    res.json({ ok: true, message: `Password changed for ${mailbox.address}.` });
+  }),
+);
+
+/// Deletes a mailbox at the provider, then removes the local row.
+///
+/// Deliberately separate from DELETE /emails/:id, which only removes the
+/// portal's record. Destroying a real mailbox should never be something you
+/// can do by reaching for the same button.
+domainsRouter.delete(
+  '/:id/emails/:emailId/provider',
+  withDomain({ provider: true }),
+  asyncHandler(async (req, res) => {
+    const mailbox = await prisma.emailAccount.findFirst({
+      where: { id: req.params.emailId, domainId: req.domain.id },
+    });
+    if (!mailbox) throw notFound('Mailbox not found.');
+    if (!mailbox.externalId || !req.domain.providerId) {
+      throw badRequest('This mailbox only exists in the portal. Use Remove to delete the portal record.');
+    }
+
+    const { adapter, token } = await loadProviderWithToken(req.domain.providerId);
+    if (typeof adapter.deleteMailbox !== 'function') {
+      throw badRequest('This provider does not support deleting mailboxes through its API.');
+    }
+
+    try {
+      await adapter.deleteMailbox(token, mailbox.externalId);
+    } catch (err) {
+      throw new HttpError(err.status && err.status < 500 ? 400 : 502, err.message);
+    }
+
+    // Only drop the local row once the provider has confirmed the deletion,
+    // so a failure leaves the portal still showing what really exists.
+    await prisma.emailAccount.delete({ where: { id: mailbox.id } });
+    res.json({ ok: true, message: `${mailbox.address} was permanently deleted at the provider.` });
+  }),
+);
+
+/// Forwarders, aliases, autoreplies and catch-alls, read live from the
+/// provider. Not stored, so they cannot go stale.
+domainsRouter.get(
+  '/:id/emails/extras',
+  withDomain({ provider: true }),
+  asyncHandler(async (req, res) => {
+    if (!req.domain.providerId) {
+      return res.json({ supported: false, extras: null, error: null });
+    }
+    const { adapter, token } = await loadProviderWithToken(req.domain.providerId);
+    const result = await tryCapability(adapter, 'listEmailExtras', token, req.domain.name);
+    res.json({ supported: result.supported, extras: result.data, error: result.error });
   }),
 );
 

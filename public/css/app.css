@@ -294,6 +294,7 @@ input:disabled, select:disabled { background: #f6f7fa; color: var(--text-muted);
 .alert.ok { background: var(--ok-soft); color: var(--ok); border-color: #c3e8d8; }
 .alert.info { background: var(--accent-soft); color: var(--accent); border-color: #dbe0fd; }
 .alert.warn { background: var(--warn-soft); color: var(--warn); border-color: #f2ddb8; }
+.alert.danger { background: var(--danger-soft); color: var(--danger); border-color: #f5cecb; }
 .alert ul { margin: 6px 0 0; padding-left: 18px; }
 
 /* Definition list used for read-only detail panels */

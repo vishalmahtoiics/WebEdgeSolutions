@@ -18,7 +18,7 @@
 const BASE_URL = process.env.HOSTINGER_API_BASE_URL || 'https://developers.hostinger.com';
 const TIMEOUT_MS = 20000;
 
-async function request(token, path, { method = 'GET' } = {}) {
+async function request(token, path, { method = 'GET', body } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
@@ -29,28 +29,40 @@ async function request(token, path, { method = 'GET' } = {}) {
         Accept: 'application/json',
         'Content-Type': 'application/json',
       },
+      body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller.signal,
     });
 
     const text = await res.text();
-    let body = null;
+    let payload = null;
     if (text) {
       try {
-        body = JSON.parse(text);
+        payload = JSON.parse(text);
       } catch {
-        body = text;
+        payload = text;
       }
     }
 
     if (!res.ok) {
-      const message =
-        (body && (body.message || body.error)) ||
+      let message =
+        (payload && (payload.message || payload.error)) ||
         (res.status === 401 ? 'Invalid or expired API token.' : `Hostinger API returned ${res.status}.`);
+
+      // 422 responses carry per-field reasons; surfacing them saves a round of
+      // guessing at which rule the input broke.
+      const fieldErrors = payload?.errors && typeof payload.errors === 'object' ? payload.errors : null;
+      if (fieldErrors) {
+        const detail = Object.entries(fieldErrors)
+          .map(([field, msgs]) => `${field}: ${[].concat(msgs).join(', ')}`)
+          .join('; ');
+        if (detail) message = `${message} (${detail})`;
+      }
+
       const err = new Error(message);
       err.status = res.status;
       throw err;
     }
-    return body;
+    return payload;
   } catch (err) {
     if (err.name === 'AbortError') {
       const timeout = new Error('Hostinger API did not respond in time.');
@@ -79,6 +91,46 @@ function toDate(value) {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/// Finds the mail order covering a domain. Mailboxes hang off an order rather
+/// than a domain in Hostinger's model, so nothing mail-related can happen
+/// without one.
+async function findMailOrder(token, domainName) {
+  const orders = unwrap(await request(token, '/api/mail/v1/orders'));
+  const wanted = String(domainName).toLowerCase();
+
+  const order = orders.find((o) => {
+    const d = o?.domain;
+    const name = typeof d === 'string' ? d : d?.domain || d?.name;
+    return String(name || '').toLowerCase() === wanted;
+  });
+
+  if (!order?.id) {
+    const err = new Error(
+      `${domainName} has no email plan at Hostinger, so mailboxes cannot be managed there. ` +
+        'You can still record mailboxes in the portal manually.',
+    );
+    err.status = 404;
+    throw err;
+  }
+  return order;
+}
+
+/// Maps a mailbox resource. Hostinger reports usage as `storageUsed` and
+/// `storageQuota` in KILOBYTES, so both are converted to megabytes here.
+function toMailbox(m) {
+  const kbToMb = (kb) => (kb === null || kb === undefined ? null : Math.round(Number(kb) / 1024));
+  return {
+    address: m.address,
+    status: m.status || 'unknown',
+    externalId: m.id != null ? String(m.id) : null,
+    quotaMb: kbToMb(m.usage?.storageQuota),
+    usedMb: kbToMb(m.usage?.storageUsed),
+    messagesUsed: m.usage?.messagesUsed ?? null,
+    messagesQuota: m.usage?.messagesQuota ?? null,
+    isCatchall: m.isCatchall ?? null,
+  };
+}
+
 export const hostingerAdapter = {
   key: 'hostinger',
   label: 'Hostinger',
@@ -93,6 +145,11 @@ export const hostingerAdapter = {
     domains: true,
     dns: true,
     email: true,
+    // Mailboxes can be created, deleted and have their password changed
+    // through the API; these act on the real account.
+    emailWrite: true,
+    // Forwarders, aliases, autoreplies and catch-alls are read here only.
+    emailExtras: true,
     servers: true,
     ftp: false, // Hostinger's API does not expose FTP/FTPS credentials.
   },
@@ -199,28 +256,102 @@ export const hostingerAdapter = {
   /// we find the order matching this domain first. No order means the domain
   /// has no email plan — an empty list, not an error.
   async listEmailAccounts(token, domainName) {
-    const orders = unwrap(await request(token, '/api/mail/v1/orders'));
-    const wanted = String(domainName).toLowerCase();
-
-    const order = orders.find((o) => {
-      const d = o?.domain;
-      const name = typeof d === 'string' ? d : d?.domain || d?.name;
-      return String(name || '').toLowerCase() === wanted;
-    });
+    // Reading is tolerant: a domain with no email plan simply has no
+    // mailboxes, which is a fact rather than a failure.
+    const order = await findMailOrder(token, domainName).catch(() => null);
     if (!order?.id) return [];
 
     const mailboxes = unwrap(
       await request(token, `/api/mail/v1/orders/${encodeURIComponent(order.id)}/mailboxes`),
     );
-    return mailboxes
-      .filter((m) => m?.address)
-      .map((m) => ({
-        address: m.address,
-        status: m.status || 'unknown',
-        externalId: m.id != null ? String(m.id) : null,
-        quotaMb: m.usage?.quota != null ? Math.round(Number(m.usage.quota) / (1024 * 1024)) : null,
-        usedMb: m.usage?.used != null ? Math.round(Number(m.usage.used) / (1024 * 1024)) : null,
-      }));
+    return mailboxes.filter((m) => m?.address).map(toMailbox);
+  },
+
+  // -------------------------------------------------------------------------
+  // Mailbox writes. These change the real account, so each one resolves the
+  // mail order for the domain first and fails loudly when there is none —
+  // better than appearing to succeed against nothing.
+  // -------------------------------------------------------------------------
+
+  /// Creates a mailbox on the domain's mail plan.
+  /// `localPart` is the piece before the @; the domain comes from the order.
+  async createMailbox(token, domainName, { localPart, password }) {
+    const order = await findMailOrder(token, domainName);
+    const created = await request(token, `/api/mail/v1/orders/${encodeURIComponent(order.id)}/mailboxes`, {
+      method: 'POST',
+      body: { localPart, password },
+    });
+    const data = created?.data && typeof created.data === 'object' ? created.data : created;
+    return data?.address ? toMailbox(data) : { address: `${localPart}@${domainName}`, status: 'active', externalId: data?.id != null ? String(data.id) : null };
+  },
+
+  /// Permanently deletes a mailbox and everything in it.
+  async deleteMailbox(token, mailboxId) {
+    await request(token, `/api/mail/v1/mailboxes/${encodeURIComponent(mailboxId)}`, { method: 'DELETE' });
+    return { ok: true };
+  },
+
+  async changeMailboxPassword(token, mailboxId, password) {
+    await request(token, `/api/mail/v1/mailboxes/${encodeURIComponent(mailboxId)}/password`, {
+      method: 'PATCH',
+      body: { password },
+    });
+    return { ok: true };
+  },
+
+  /// Forwarders, aliases, autoreplies and catch-alls for a domain, read only.
+  /// Each is optional on the plan, so one failing must not lose the others.
+  async listEmailExtras(token, domainName) {
+    const order = await findMailOrder(token, domainName).catch(() => null);
+    if (!order?.id) return { forwarders: [], aliases: [], autoreplies: [], catchalls: [] };
+
+    const base = `/api/mail/v1/orders/${encodeURIComponent(order.id)}`;
+    const fetchList = async (path) => {
+      try {
+        return unwrap(await request(token, path));
+      } catch {
+        return [];
+      }
+    };
+
+    const [forwarders, aliases, autoreplies, catchalls] = await Promise.all([
+      fetchList(`${base}/forwarders`),
+      fetchList(`${base}/aliases`),
+      fetchList(`${base}/autoreplies`),
+      fetchList(`${base}/catchalls`),
+    ]);
+
+    return {
+      forwarders: forwarders.map((f) => ({
+        id: f.id != null ? String(f.id) : null,
+        mailbox: f.mailbox?.address || null,
+        destination: f.destination || null,
+        keepCopy: f.isKeepCopyEnabled ?? null,
+        isActive: f.isActive ?? null,
+        isConfirmed: f.isConfirmed ?? null,
+      })),
+      aliases: aliases.map((a) => ({
+        id: a.id != null ? String(a.id) : null,
+        address: a.address || null,
+        mailbox: a.mailbox?.address || null,
+        isActive: a.isActive ?? null,
+      })),
+      autoreplies: autoreplies.map((r) => ({
+        id: r.id != null ? String(r.id) : null,
+        mailbox: r.mailbox?.address || null,
+        subject: r.subject || null,
+        body: r.body || null,
+        startsAt: toDate(r.startsAt),
+        endsAt: toDate(r.endsAt),
+      })),
+      catchalls: catchalls.map((c) => ({
+        id: c.id != null ? String(c.id) : null,
+        mailbox: c.mailbox?.address || null,
+        domain: c.domain || null,
+        isActive: c.isActive ?? null,
+        isConfirmed: c.isConfirmed ?? null,
+      })),
+    };
   },
 
   /// VPS instances on the account, shown read-only in the Super Admin area.

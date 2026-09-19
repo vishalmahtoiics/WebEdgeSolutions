@@ -45,7 +45,7 @@ export async function renderDomains({ user }) {
           'div',
           { class: 'card-body' },
           emptyState(
-            '🌐',
+            'globe',
             'No domains yet',
             isAdmin
               ? 'Connect a provider and click Sync, or add a domain manually.'
