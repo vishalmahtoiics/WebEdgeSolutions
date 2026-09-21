@@ -255,6 +255,43 @@ Normal users see only the effective figure — never the two apart.
 
 ---
 
+## File manager
+
+Once a domain has FTP details under **FTP & Server**, the **Files** tab browses
+the site over FTP, FTPS or SFTP:
+
+- browse folders, with breadcrumbs
+- upload and download files
+- create folders, rename and delete
+- open small text files in an editor and save them back
+
+**Root folder** is the important setting. Everything the file manager does is
+resolved beneath it — usually `/public_html`. A path from the browser can never
+climb above it: `../../etc/passwd` resolves back inside the root rather than
+out of it, and the tests prove a file placed just outside stays unreachable.
+
+Other limits worth knowing:
+
+| | |
+| --- | --- |
+| Upload size | 25 MB per file |
+| Editable as text | up to 512 KB; binary files are refused rather than mangled |
+| Deleting the root | refused, so one click cannot wipe a site |
+
+**Test Connection** on this tab checks the stored credentials the same way the
+provider page checks an API token.
+
+Assigned users get the file manager for their own domains. FTP credentials
+themselves are Super Admin only — they point at a real server, and a user who
+could edit the host could aim the portal somewhere it has no business going.
+
+> FTPS connections are encrypted but the certificate is not verified, because
+> hosting panels very often present a self-signed or mismatched one and
+> refusing those would make FTPS unusable here.
+
+
+---
+
 ## Roles and access
 
 **Super Admin** manages everything: providers, all domains, users, and resource
@@ -292,8 +329,10 @@ user can reach contains the provider's name.
 ## Security
 
 - Passwords hashed with bcrypt (cost 12).
-- Provider API tokens encrypted at rest with AES-256-GCM and **never** sent to
-  the browser — the UI only ever sees the last four characters.
+- Provider API tokens **and FTP passwords** encrypted at rest with AES-256-GCM
+  and **never** sent to the browser — the UI only ever sees the last four
+  characters.
+- Every file-manager path is confined beneath the domain's configured root.
 - Sessions stored server-side in PostgreSQL; cookies are `httpOnly` and
   `sameSite=lax`, and `Secure` when `SECURE_COOKIES=true`.
 - Session is regenerated on sign-in to prevent session fixation.

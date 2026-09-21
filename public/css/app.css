@@ -411,3 +411,31 @@ input:disabled, select:disabled { background: #f6f7fa; color: var(--text-muted);
   .modal-foot { flex-direction: column-reverse; }
   .modal-foot .btn { width: 100%; }
 }
+
+/* ---------------------------------------------------------------------------
+   File manager
+--------------------------------------------------------------------------- */
+.crumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.crumb {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: none; border: 0; padding: 2px 6px; border-radius: 6px;
+  font: inherit; font-size: 13px; color: var(--accent); cursor: pointer;
+}
+.crumb:hover { background: var(--accent-soft); }
+.crumb.current { color: var(--text-muted); cursor: default; }
+.crumb-sep { color: var(--border-strong); font-size: 13px; }
+
+.file-name {
+  display: inline-flex; align-items: center; gap: 9px;
+  background: none; border: 0; padding: 0; font: inherit; font-size: 14px;
+  color: var(--text); cursor: pointer; text-align: left;
+}
+.file-name:hover { color: var(--accent); }
+.file-name svg { color: var(--text-muted); flex: none; }
+
+.code-editor {
+  width: 100%; min-height: 340px; resize: vertical;
+  font-family: var(--mono); font-size: 13px; line-height: 1.55;
+  white-space: pre; overflow-wrap: normal; overflow-x: auto;
+  background: #fbfcfe;
+}

@@ -43,3 +43,23 @@ export function tokenHint(token) {
   const tail = String(token).slice(-4);
   return `••••${tail}`;
 }
+
+/// Decrypts a value that may predate encryption.
+///
+/// The FTP password was stored in the clear before this, so a value that is not
+/// in our `iv:tag:data` form is taken as legacy plaintext and returned as-is.
+/// It is re-encrypted the next time the record is saved.
+export function decryptMaybe(payload) {
+  if (!payload) return null;
+  const parts = String(payload).split(':');
+  if (parts.length !== 3) return String(payload);
+  try {
+    return decrypt(payload);
+  } catch {
+    return String(payload);
+  }
+}
+
+/// True when a value is already in our encrypted form.
+export const isEncrypted = (value) =>
+  typeof value === 'string' && value.split(':').length === 3;

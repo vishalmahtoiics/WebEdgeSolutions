@@ -200,6 +200,10 @@ model DomainSettings {
   ftpPassword String?
   ftpProtocol String? // FTP | FTPS | SFTP
 
+  /// Directory the file manager is confined to, e.g. /public_html. Everything
+  /// browsed through the portal is resolved beneath this.
+  ftpRootPath String?
+
   // Server information
   serverIp       String?
   serverHostname String?

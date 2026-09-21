@@ -3,6 +3,7 @@ import {
   statusBadge, sourceBadge, emptyState, formatDate, relativeTime, formatMb,
 } from '../core.js';
 import { navigate, refresh } from '../app.js';
+import { filesPanel } from './files.js';
 import {
   createMailboxModal,
   passwordModal,
@@ -77,6 +78,7 @@ export async function renderDomainManage({ param, user }) {
     { key: 'overview', label: 'Overview' },
     { key: 'dns', label: `DNS Records (${data.dnsRecords.length})` },
     { key: 'emails', label: `Emails (${data.emailAccounts.length})` },
+    { key: 'files', label: 'Files' },
     { key: 'settings', label: 'FTP & Server' },
   ];
   if (isAdmin) tabs.push({ key: 'access', label: 'Access' });
@@ -127,6 +129,7 @@ function refreshButton(domain) {
 function renderPanel(key, data, isAdmin) {
   if (key === 'dns') return dnsPanel(data, isAdmin);
   if (key === 'emails') return emailPanel(data, isAdmin);
+  if (key === 'files') return filesPanel(data.domain);
   if (key === 'settings') return settingsPanel(data);
   if (key === 'access') return accessPanel(data);
   return overviewPanel(data, isAdmin);
@@ -672,7 +675,14 @@ function settingsPanel(data) {
     ftpHost: el('input', { type: 'text', value: s.ftpHost || '' }),
     ftpPort: el('input', { type: 'number', value: s.ftpPort ?? '', min: 1, max: 65535 }),
     ftpUsername: el('input', { type: 'text', value: s.ftpUsername || '' }),
-    ftpPassword: el('input', { type: 'password', value: s.ftpPassword || '', autocomplete: 'off' }),
+    // Never pre-filled: the server does not send the password back. Leaving it
+    // empty keeps the stored one.
+    ftpPassword: el('input', {
+      type: 'password',
+      autocomplete: 'off',
+      placeholder: s.hasFtpPassword ? `Saved (${s.ftpPasswordHint}) — leave blank to keep it` : '',
+    }),
+    ftpRootPath: el('input', { type: 'text', value: s.ftpRootPath || '', placeholder: '/public_html' }),
     serverIp: el('input', { type: 'text', value: s.serverIp || '' }),
     serverHostname: el('input', { type: 'text', value: s.serverHostname || '' }),
     serverLocation: el('input', { type: 'text', value: s.serverLocation || '' }),
@@ -724,7 +734,12 @@ function settingsPanel(data) {
           field('Protocol', inputs.ftpProtocol),
           el('div', { class: 'form-row' }, field('Host', inputs.ftpHost), field('Port', inputs.ftpPort)),
           field('Username', inputs.ftpUsername),
-          field('Password', inputs.ftpPassword),
+          field('Password', inputs.ftpPassword, s.hasFtpPassword ? 'A password is already saved. Type a new one only to replace it.' : null),
+          field(
+            'Root folder',
+            inputs.ftpRootPath,
+            'The file manager is confined to this folder. Usually /public_html. Leave blank for the login directory.',
+          ),
         ),
       ),
       el(

@@ -5,8 +5,10 @@ import { validate } from '../middleware/validate.js';
 import { requireAuth, requireAdmin, getAccessibleDomain, isAdmin } from '../middleware/auth.js';
 import { asyncHandler, badRequest, notFound, HttpError } from '../lib/errors.js';
 import { getAdapter, tryCapability } from '../providers/index.js';
+import { encrypt, decryptMaybe, tokenHint } from '../lib/crypto.js';
 import { loadProviderWithToken } from '../services/providerService.js';
 import { syncDnsRecords, syncEmailAccounts, refreshDomain } from '../services/syncService.js';
+import { filesRouter } from './files.js';
 import {
   presentDomainSummary,
   presentDomainDetail,
@@ -108,7 +110,7 @@ domainsRouter.get(
       domain: presentDomainDetail(d, admin),
       // Drives which panels offer a refresh action.
       capabilities: presentCapabilities(adapter?.capabilities, d, admin),
-      settings: d.settings,
+      settings: presentSettings(d.settings),
       dnsRecords: d.dnsRecords.map((r) => presentDnsRecord(r, admin)),
       emailAccounts: d.emailAccounts.map((m) => presentEmailAccount(m, admin)),
       assignedUsers: admin ? d.assignments.map((a) => a.user) : undefined,
@@ -208,6 +210,7 @@ const settingsSchema = z.object({
   ftpUsername: z.string().trim().max(255).optional(),
   ftpPassword: z.string().max(255).optional(),
   ftpProtocol: z.enum(['FTP', 'FTPS', 'SFTP']).or(z.literal('')).optional(),
+  ftpRootPath: z.string().trim().max(1024).optional(),
   serverIp: z.string().trim().max(64).optional(),
   serverHostname: z.string().trim().max(255).optional(),
   serverLocation: z.string().trim().max(120).optional(),
@@ -215,6 +218,18 @@ const settingsSchema = z.object({
   phpVersion: z.string().trim().max(20).optional(),
   notes: z.string().max(2000).optional(),
 });
+
+/// Domain settings for the browser. The FTP password is a live credential for
+/// someone else's server, so only a hint of it ever leaves this process.
+function presentSettings(settings) {
+  if (!settings) return settings;
+  const { ftpPassword, ...rest } = settings;
+  return {
+    ...rest,
+    hasFtpPassword: Boolean(ftpPassword),
+    ftpPasswordHint: ftpPassword ? tokenHint(decryptMaybe(ftpPassword)) : null,
+  };
+}
 
 const blankToNull = (obj) =>
   Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, v === '' ? null : v]));
@@ -225,14 +240,31 @@ domainsRouter.put(
   validate(settingsSchema),
   asyncHandler(async (req, res) => {
     const data = blankToNull(req.body);
+
+    // An empty password field means "leave it alone", so an administrator can
+    // edit the host or username without retyping the secret.
+    if (data.ftpPassword) {
+      data.ftpPassword = encrypt(data.ftpPassword);
+    } else {
+      delete data.ftpPassword;
+    }
+
     const settings = await prisma.domainSettings.upsert({
       where: { domainId: req.domain.id },
       create: { domainId: req.domain.id, ...data },
       update: data,
     });
-    res.json({ settings });
+    res.json({ settings: presentSettings(settings) });
   }),
 );
+
+// ---------------------------------------------------------------------------
+// Files
+// ---------------------------------------------------------------------------
+
+// Mounted through withDomain, so every file route inherits the same check as
+// the rest of the domain: a user reaches only domains assigned to them.
+domainsRouter.use('/:id/files', withDomain(), filesRouter);
 
 // ---------------------------------------------------------------------------
 // DNS records
