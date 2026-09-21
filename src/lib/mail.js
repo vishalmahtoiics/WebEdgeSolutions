@@ -6,6 +6,7 @@
 
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
+import MailComposer from 'nodemailer/lib/mail-composer/index.js';
 import { simpleParser } from 'mailparser';
 
 const TIMEOUT_MS = 20000;
@@ -72,19 +73,38 @@ export async function withImap(settings, fn) {
 }
 
 /// Folders, with the well-known ones flagged so the UI can order and name them.
-export async function listFolders(settings) {
+///
+/// `withCounts` asks the server for message and unread totals per folder. It
+/// costs a STATUS call each, so the list view asks for them and anything that
+/// just needs folder names does not.
+export async function listFolders(settings, { withCounts = false } = {}) {
   return withImap(settings, async (client) => {
-    const boxes = await client.list();
-    return boxes
-      .filter((b) => !b.flags?.has('\\Noselect'))
-      .map((b) => ({
-        path: b.path,
-        name: b.name,
-        // IMAP marks special folders with a use flag; falling back to the name
-        // covers servers that do not advertise SPECIAL-USE.
-        specialUse: b.specialUse ? b.specialUse.replace('\\', '').toLowerCase() : guessUse(b.name),
-        subscribed: b.subscribed !== false,
-      }));
+    const boxes = (await client.list()).filter((b) => !b.flags?.has('\\Noselect'));
+
+    const folders = boxes.map((b) => ({
+      path: b.path,
+      name: b.name,
+      // IMAP marks special folders with a use flag; falling back to the name
+      // covers servers that do not advertise SPECIAL-USE.
+      specialUse: b.specialUse ? b.specialUse.replace('\\', '').toLowerCase() : guessUse(b.name),
+      subscribed: b.subscribed !== false,
+      total: null,
+      unread: null,
+    }));
+
+    if (withCounts) {
+      for (const folder of folders) {
+        try {
+          const status = await client.status(folder.path, { messages: true, unseen: true });
+          folder.total = status.messages ?? null;
+          folder.unread = status.unseen ?? null;
+        } catch {
+          // A folder that refuses STATUS still belongs in the list.
+        }
+      }
+    }
+
+    return folders;
   });
 }
 
@@ -101,11 +121,58 @@ function guessUse(name) {
 const addressList = (value) =>
   (value || []).map((a) => ({ name: a.name || null, address: a.address || null }));
 
+/// The row shape used by both the plain listing and search results.
+const summarise = (msg) => ({
+  uid: msg.uid,
+  subject: msg.envelope?.subject || '(no subject)',
+  from: addressList(msg.envelope?.from),
+  to: addressList(msg.envelope?.to),
+  date: msg.envelope?.date ? new Date(msg.envelope.date).toISOString() : null,
+  size: msg.size ?? null,
+  seen: Boolean(msg.flags?.has('\\Seen')),
+  flagged: Boolean(msg.flags?.has('\\Flagged')),
+  answered: Boolean(msg.flags?.has('\\Answered')),
+  hasAttachments: Boolean(msg.bodyStructure && hasAttachment(msg.bodyStructure)),
+});
+
+/// Walks a body structure looking for a part the client should show as an
+/// attachment.
+function hasAttachment(node) {
+  if (!node) return false;
+  if (node.disposition === 'attachment') return true;
+  return (node.childNodes || []).some(hasAttachment);
+}
+
 /// One page of a folder, newest first.
-export async function listMessages(settings, { folder = 'INBOX', page = 1, perPage = 25 } = {}) {
+///
+/// With `search`, the server does the matching (IMAP SEARCH across from,
+/// subject and body) and the page is taken from the results. Searching in the
+/// browser would only ever see the page already loaded.
+export async function listMessages(settings, { folder = 'INBOX', page = 1, perPage = 25, search = '' } = {}) {
   return withImap(settings, async (client) => {
     const lock = await client.getMailboxLock(folder);
     try {
+      const query = String(search || '').trim();
+
+      if (query) {
+        const uids = await client.search({ or: [{ from: query }, { subject: query }, { body: query }] }, { uid: true });
+        const total = uids.length;
+        if (!total) return { folder, page, perPage, total, messages: [], search: query };
+
+        // Newest first, then the requested page of that.
+        const ordered = [...uids].reverse();
+        const slice = ordered.slice((page - 1) * perPage, page * perPage);
+        if (!slice.length) return { folder, page, perPage, total, messages: [], search: query };
+
+        const found = [];
+        for await (const msg of client.fetch(slice, { uid: true, envelope: true, flags: true, size: true, bodyStructure: true }, { uid: true })) {
+          found.push(summarise(msg));
+        }
+        // fetch may return in any order, so restore the newest-first order.
+        found.sort((a, b) => slice.indexOf(a.uid) - slice.indexOf(b.uid));
+        return { folder, page, perPage, total, messages: found, search: query };
+      }
+
       const total = client.mailbox.exists;
       if (!total) return { folder, page, perPage, total, messages: [] };
 
@@ -121,18 +188,9 @@ export async function listMessages(settings, { folder = 'INBOX', page = 1, perPa
         envelope: true,
         flags: true,
         size: true,
+        bodyStructure: true,
       })) {
-        messages.push({
-          uid: msg.uid,
-          subject: msg.envelope?.subject || '(no subject)',
-          from: addressList(msg.envelope?.from),
-          to: addressList(msg.envelope?.to),
-          date: msg.envelope?.date ? new Date(msg.envelope.date).toISOString() : null,
-          size: msg.size ?? null,
-          seen: Boolean(msg.flags?.has('\\Seen')),
-          flagged: Boolean(msg.flags?.has('\\Flagged')),
-          answered: Boolean(msg.flags?.has('\\Answered')),
-        });
+        messages.push(summarise(msg));
       }
 
       messages.reverse(); // newest first
@@ -257,20 +315,42 @@ export async function verifySmtp(settings) {
 /// Sends a message as the mailbox. The From address is the mailbox itself —
 /// it is not something the caller gets to choose, since the server would
 /// reject or spam-flag anything else anyway.
-export async function sendMessage(settings, { from, to, cc, subject, text, html, inReplyTo, references }) {
+export async function sendMessage(settings, { from, to, cc, bcc, subject, text, html, inReplyTo, references, attachments }) {
   const transport = transportFor(settings);
   try {
-    const info = await transport.sendMail({
+    // The message is built once, here, and then both sent and filed to Sent.
+    // Composing it separately is what makes the copy in Sent byte-identical to
+    // what actually left the server — and an SMTP send does not hand the raw
+    // message back, so there would otherwise be nothing to file.
+    const compiled = new MailComposer({
       from,
       to,
-      cc: cc || undefined,
+      cc: cc?.length ? cc : undefined,
+      bcc: bcc?.length ? bcc : undefined,
       subject,
       text: text || undefined,
       html: html || undefined,
       inReplyTo: inReplyTo || undefined,
       references: references || undefined,
-    });
-    return { messageId: info.messageId, accepted: info.accepted, rejected: info.rejected };
+      attachments: attachments?.length
+        ? attachments.map((a) => ({ filename: a.filename, content: a.content, contentType: a.contentType }))
+        : undefined,
+    }).compile();
+
+    // The envelope carries the Bcc recipients; the built message does not, so
+    // nobody on the To line learns who else received it.
+    const envelope = compiled.getEnvelope();
+    const messageId = compiled.messageId();
+    const raw = await compiled.build();
+
+    const info = await transport.sendMail({ envelope, raw });
+    return {
+      messageId,
+      accepted: info.accepted,
+      rejected: info.rejected,
+      // Kept so a copy can be filed in Sent.
+      raw,
+    };
   } catch (err) {
     throw new MailError(friendlyError(err), 502);
   } finally {
@@ -288,4 +368,66 @@ export async function appendToSent(settings, { sentFolder, raw }) {
   } catch {
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Acting on messages
+// ---------------------------------------------------------------------------
+
+/// Marks a message read or unread.
+export async function setSeen(settings, { folder, uid, seen }) {
+  return withImap(settings, async (client) => {
+    const lock = await client.getMailboxLock(folder);
+    try {
+      if (seen) await client.messageFlagsAdd(String(uid), ['\\Seen'], { uid: true });
+      else await client.messageFlagsRemove(String(uid), ['\\Seen'], { uid: true });
+      return { seen };
+    } finally {
+      lock.release();
+    }
+  });
+}
+
+/// Stars or unstars a message.
+export async function setFlagged(settings, { folder, uid, flagged }) {
+  return withImap(settings, async (client) => {
+    const lock = await client.getMailboxLock(folder);
+    try {
+      if (flagged) await client.messageFlagsAdd(String(uid), ['\\Flagged'], { uid: true });
+      else await client.messageFlagsRemove(String(uid), ['\\Flagged'], { uid: true });
+      return { flagged };
+    } finally {
+      lock.release();
+    }
+  });
+}
+
+/// Moves a message to another folder.
+export async function moveMessage(settings, { folder, uid, to }) {
+  if (folder === to) throw new MailError('That message is already in this folder.', 400);
+  return withImap(settings, async (client) => {
+    const lock = await client.getMailboxLock(folder);
+    try {
+      await client.messageMove(String(uid), to, { uid: true });
+      return { moved: true, to };
+    } finally {
+      lock.release();
+    }
+  });
+}
+
+/// The raw source of a message, used to build a forward.
+export async function getRawMessage(settings, { folder, uid }) {
+  return withImap(settings, async (client) => {
+    const lock = await client.getMailboxLock(folder);
+    try {
+      const { content } = await client.download(String(uid), undefined, { uid: true });
+      if (!content) throw new MailError('That message could not be found.', 404);
+      const chunks = [];
+      for await (const chunk of content) chunks.push(chunk);
+      return Buffer.concat(chunks);
+    } finally {
+      lock.release();
+    }
+  });
 }

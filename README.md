@@ -324,6 +324,54 @@ is always the mailbox itself — the mail server would reject anything else.
 
 Assigned users get webmail for mailboxes on their own domains.
 
+### The standalone mail app
+
+There is also a full mail client that people reach on its own hostname, with no
+portal account at all: they go to the address, type their **email address and
+the mailbox's own password**, and they are in.
+
+Point a hostname at the same app and set `MAIL_HOST`:
+
+```
+MAIL_HOST=mails.yourdomain.com
+```
+
+That hostname then serves the mail client instead of the portal. Without it —
+or before the DNS exists — the same app is at `/webmail` on the normal address.
+
+The only setup it needs is the domain's IMAP and SMTP settings under **FTP &
+Server**. Every mailbox on a domain that has those can sign in; no mailbox
+password has to be saved in the portal, and none is.
+
+What it does:
+
+| | |
+| --- | --- |
+| Folders | Inbox, Sent, Drafts, Junk, Trash and any others, with unread counts |
+| Reading | Paged newest-first, HTML or plain text, attachments to download |
+| Search | Across sender, subject and body — the mail server does the matching, so it reaches past the page you are looking at |
+| Writing | Compose, reply, reply-all and forward, with Cc, Bcc and up to 10 attachments of 15 MB each |
+| Managing | Star, mark read or unread, move between folders, delete to Trash |
+| On a phone | One pane at a time, with folders behind the menu button |
+
+A sent message is filed to the Sent folder as a byte-identical copy of what
+actually left the server. Bcc recipients receive it, but no Bcc header travels
+with the message, so nobody on the To line learns who else got it.
+
+Forwarding carries the original along as a `message/rfc822` attachment rather
+than pasting its text, so formatting and its own attachments survive intact.
+
+**About the password.** It is never written to the database as a mailbox
+credential. It lives in the server-side session, encrypted with the application
+key, and goes away when the session ends. A wrong address and a wrong password
+give the same answer, so the sign-in page cannot be used to find out which
+domains are hosted here. Sign-ins are rate limited.
+
+HTML messages render in a sandboxed frame — no scripts, no access to the page
+around them — and the app's content security policy blocks remote loads, so
+tracking pixels never fire. The reader says so when a message contains images
+it did not load.
+
 
 ---
 
@@ -417,6 +465,10 @@ public/
   index.html           SPA shell
   css/app.css          Styles
   js/                  Frontend modules and views
+public-mail/           The standalone mail app (served on MAIL_HOST, or /webmail)
+  index.html           Shell
+  css/mail.css         Styles
+  js/                  Mail client modules
 tests/                 Test suites
 ```
 

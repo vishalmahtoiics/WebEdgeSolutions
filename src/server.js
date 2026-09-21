@@ -14,6 +14,7 @@ import { providersRouter } from './routes/providers.js';
 import { domainsRouter } from './routes/domains.js';
 import { usersRouter } from './routes/users.js';
 import { dashboardRouter } from './routes/dashboard.js';
+import { mailAppRouter } from './routes/mailapp.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -73,13 +74,38 @@ app.use('/api/providers', providersRouter);
 app.use('/api/domains', domainsRouter);
 app.use('/api/users', usersRouter);
 
+app.use('/api/webmail', mailAppRouter);
+
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Unknown API endpoint.' }));
 
-// Static SPA. Any non-API path falls through to index.html so client-side
-// routes survive a page refresh.
+// Two front ends share this server: the admin portal, and the standalone
+// webmail app people sign in to with an email address.
+//
+// Which one you get depends on the hostname (MAIL_HOST), so webmail can live
+// at mails.example.com. /webmail works as well, for setups without a second
+// DNS name and for trying it out before the DNS exists.
 const publicDir = path.join(__dirname, '..', 'public');
-app.use(express.static(publicDir, { maxAge: isProd ? '1h' : 0 }));
-app.get('*', (_req, res) => res.sendFile(path.join(publicDir, 'index.html')));
+const mailDir = path.join(__dirname, '..', 'public-mail');
+const staticOptions = { maxAge: isProd ? '1h' : 0 };
+
+const isMailHost = (req) =>
+  Boolean(config.mailHost) && String(req.hostname || '').toLowerCase() === config.mailHost;
+
+app.use('/webmail', express.static(mailDir, staticOptions));
+app.get('/webmail/*', (_req, res) => res.sendFile(path.join(mailDir, 'index.html')));
+
+app.use((req, res, next) => {
+  if (!isMailHost(req)) return next();
+  return express.static(mailDir, staticOptions)(req, res, next);
+});
+
+app.use(express.static(publicDir, staticOptions));
+
+// Any remaining path falls through to the right index.html, so client-side
+// routes survive a refresh.
+app.get('*', (req, res) =>
+  res.sendFile(path.join(isMailHost(req) ? mailDir : publicDir, 'index.html')),
+);
 
 // Error handler. Client errors carry their message through; anything else is
 // logged server-side and reported generically so internals do not leak.

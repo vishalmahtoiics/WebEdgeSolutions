@@ -17,6 +17,9 @@ export const config = {
   sessionSecret: required('SESSION_SECRET', 'dev-only-insecure-session-secret'),
   encryptionKey: required('ENCRYPTION_KEY', '0'.repeat(64)),
   secureCookies: String(env('SECURE_COOKIES')).toLowerCase() === 'true',
+  /// Hostname that serves the standalone webmail app instead of the portal,
+  /// e.g. mails.example.com. Unset means webmail is only reachable at /webmail.
+  mailHost: (env('MAIL_HOST') || '').toLowerCase(),
   admin: {
     email: env('ADMIN_EMAIL') || 'admin@example.com',
     password: cleanEnv(process.env.ADMIN_PASSWORD) || 'Admin@12345',
