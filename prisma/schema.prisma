@@ -160,9 +160,18 @@ model EmailAccount {
 
   address String
   status  String  @default("unknown")
-  quotaMb Int?
-  usedMb  Int?
   notes   String?
+
+  /// What the provider last reported. Refreshed on every sync and never
+  /// hand-edited, so the real numbers are always available even when an
+  /// administrator is choosing to display something else.
+  providerQuotaMb Int?
+  providerUsedMb  Int?
+
+  /// Administrator overrides. Null means "use the provider's value", which is
+  /// why these are nullable rather than defaulted — absent is meaningful here.
+  quotaMbOverride Int?
+  usedMbOverride  Int?
 
   /// Distinguishes mailboxes fetched from the provider from ones typed in.
   isFromProvider Boolean @default(false)
@@ -228,4 +237,18 @@ model ServerResource {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("server_resources")
+}
+
+/// The express-session store, owned by connect-pg-simple at runtime.
+///
+/// It is declared here so the schema is the single source of truth and
+/// migrations stop reporting drift; the application creates it via a
+/// migration rather than at boot (see `createTableIfMissing: false`).
+model UserSession {
+  sid    String   @id(map: "session_pkey")
+  sess   Json     @db.Json
+  expire DateTime @db.Timestamp(6)
+
+  @@index([expire], map: "IDX_session_expire")
+  @@map("user_sessions")
 }

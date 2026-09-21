@@ -134,7 +134,14 @@ test.before(async () => {
   await admin(`/providers/${ctx.providerId}/test`, { method: 'POST' });
   await admin(`/providers/${ctx.providerId}/sync`, { method: 'POST' });
 
+  const synced = await admin(`/providers/${ctx.providerId}/sync`, { method: 'POST' });
+  assert.equal(synced.status, 200, `sync failed: ${JSON.stringify(synced.data)}`);
+
   const list = await admin('/domains');
+  assert.ok(
+    list.data.domains.some((d) => d.name === DOMAIN),
+    `domain not imported. sync said: ${JSON.stringify(synced.data)}; domains: ${JSON.stringify(list.data.domains?.map((d) => d.name))}`,
+  );
   ctx.domainId = list.data.domains.find((d) => d.name === DOMAIN).id;
   ctx.otherId = list.data.domains.find((d) => d.name === OTHER).id;
 });
@@ -283,5 +290,80 @@ test('a user cannot manage mailboxes on a domain they are not assigned', async (
     ['sync', member(`/domains/${ctx.otherId}/emails/sync`, { method: 'POST' })],
   ]) {
     assert.equal((await call).status, 404, `${label} must not reach an unassigned domain`);
+  }
+});
+
+// --- Real values versus custom ones ----------------------------------------
+
+test('a synced mailbox carries the real size and usage from the server', async () => {
+  await admin(`/domains/${ctx.domainId}/emails/sync`, { method: 'POST' });
+  const { data } = await admin(`/domains/${ctx.domainId}`);
+  const info = data.emailAccounts.find((m) => m.address === `info@${DOMAIN}`);
+
+  assert.equal(info.providerQuotaMb, 10240, 'the real quota is kept');
+  assert.equal(info.providerUsedMb, 512, 'the real usage is kept');
+  assert.equal(info.quotaMb, 10240, 'with no override, the real value is shown');
+  assert.equal(info.usesCustomQuota, false);
+  ctx.infoId = info.id;
+});
+
+test('an admin can show a custom size while the real one is still kept', async () => {
+  const res = await admin(`/domains/${ctx.domainId}/emails/${ctx.infoId}`, {
+    method: 'PUT',
+    body: {
+      address: `info@${DOMAIN}`,
+      status: 'active',
+      useRealQuota: false,
+      quotaMb: 25600,
+      useRealUsed: true,
+    },
+  });
+  assert.equal(res.status, 200);
+
+  const m = res.data.email;
+  assert.equal(m.quotaMb, 25600, 'the custom figure is what is shown');
+  assert.equal(m.usesCustomQuota, true);
+  assert.equal(m.providerQuotaMb, 10240, 'the real figure is still there underneath');
+  assert.equal(m.usedMb, 512, 'usage still tracks the real value');
+  assert.equal(m.usesCustomUsed, false);
+});
+
+test('a custom value survives a sync, and the real one keeps updating', async () => {
+  // The server now reports a different usage figure.
+  mailboxes = mailboxes.map((m) =>
+    m.address === `info@${DOMAIN}` ? { ...m, usage: { storageQuota: 10485760, storageUsed: 3145728 } } : m,
+  );
+
+  await admin(`/domains/${ctx.domainId}/emails/sync`, { method: 'POST' });
+  const { data } = await admin(`/domains/${ctx.domainId}`);
+  const m = data.emailAccounts.find((x) => x.id === ctx.infoId);
+
+  assert.equal(m.quotaMb, 25600, 'the override must not be wiped by a sync');
+  assert.equal(m.providerQuotaMb, 10240, 'the real quota is still tracked');
+  assert.equal(m.usedMb, 3072, 'usage follows the server because it has no override');
+});
+
+test('ticking "use the real value" restores it', async () => {
+  const res = await admin(`/domains/${ctx.domainId}/emails/${ctx.infoId}`, {
+    method: 'PUT',
+    body: { address: `info@${DOMAIN}`, status: 'active', useRealQuota: true, useRealUsed: true },
+  });
+  assert.equal(res.data.email.usesCustomQuota, false);
+  assert.equal(res.data.email.quotaMb, 10240, 'back to the server figure');
+});
+
+test('editing a mailbox no longer detaches it from the server', async () => {
+  const { data } = await admin(`/domains/${ctx.domainId}`);
+  const m = data.emailAccounts.find((x) => x.id === ctx.infoId);
+  assert.equal(m.isFromProvider, true, 'it must keep syncing after being edited');
+  assert.ok(m.externalId, 'and keep its upstream id, so Password still works');
+});
+
+test('a user sees the effective figure but not the two apart', async () => {
+  const { data } = await member(`/domains/${ctx.domainId}`);
+  const m = data.emailAccounts.find((x) => x.address === `info@${DOMAIN}`);
+  assert.equal(typeof m.quotaMb, 'number', 'they still see a size');
+  for (const field of ['providerQuotaMb', 'quotaMbOverride', 'usesCustomQuota', 'isFromProvider']) {
+    assert.equal(m[field], undefined, `${field} is an administrator's concern`);
   }
 });

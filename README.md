@@ -227,6 +227,28 @@ the API rejects it rather than guessing what was meant.
 
 Users can manage mailboxes on the domains assigned to them, and only those.
 
+### Real values and custom ones
+
+Each mailbox carries two figures for size and usage: **what the server reports**
+and, optionally, **what a Super Admin decided to show**.
+
+In **Edit**, every figure has its own checkbox:
+
+- **ticked** — the real value from the server is shown, and it keeps updating on
+  every sync;
+- **unticked** — your own figure is shown instead. The real one is still stored
+  underneath and still refreshed, so ticking the box again restores it.
+
+The real value is always printed under the field, so you can see what the
+server says even while displaying something else. A mailbox with an override is
+marked **Custom** in the list.
+
+Editing a mailbox no longer detaches it from the provider: the real numbers keep
+tracking, and syncs update rows in place rather than deleting and recreating
+them, so overrides and notes survive.
+
+Normal users see only the effective figure — never the two apart.
+
 > Mailbox usage is reported by Hostinger as `storageUsed` / `storageQuota` in
 > **kilobytes**, and is converted to MB/GB for display.
 

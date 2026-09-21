@@ -3,6 +3,7 @@ import { prisma } from '../db.js';
 import { requireAuth, isAdmin } from '../middleware/auth.js';
 import { asyncHandler } from '../lib/errors.js';
 import { presentEmailAccount } from '../lib/visibility.js';
+import { getAdapter } from '../providers/index.js';
 
 export const dashboardRouter = Router();
 dashboardRouter.use(requireAuth);
@@ -94,19 +95,29 @@ dashboardRouter.get(
 dashboardRouter.get(
   '/my-emails',
   asyncHandler(async (req, res) => {
-    const where = isAdmin(req.user)
-      ? {}
-      : { domain: { assignments: { some: { userId: req.user.id } } } };
-
-    const emails = await prisma.emailAccount.findMany({
-      where,
-      orderBy: [{ domain: { name: 'asc' } }, { address: 'asc' }],
-      include: { domain: { select: { id: true, name: true } } },
+    // Grouped by domain, because that is the unit mailboxes are managed in:
+    // the page needs to know, per domain, whether new mailboxes can be created.
+    const domains = await prisma.domain.findMany({
+      where: isAdmin(req.user) ? {} : { assignments: { some: { userId: req.user.id } } },
+      orderBy: { name: 'asc' },
+      include: {
+        emailAccounts: { orderBy: { address: 'asc' } },
+        provider: { select: { adapter: true } },
+      },
     });
 
     const admin = isAdmin(req.user);
     res.json({
-      emails: emails.map((m) => ({ ...presentEmailAccount(m, admin), domain: m.domain })),
+      domains: domains.map((d) => {
+        const adapter = d.provider ? getAdapter(d.provider.adapter) : null;
+        return {
+          id: d.id,
+          name: d.name,
+          // A plain capability flag — it never names who provides it.
+          canManageEmail: Boolean(d.providerId && adapter?.capabilities?.emailWrite),
+          emails: d.emailAccounts.map((m) => presentEmailAccount(m, admin)),
+        };
+      }),
     });
   }),
 );

@@ -286,9 +286,10 @@ test('the user sees only mailboxes on their own domains', async () => {
     method: 'POST',
     body: { address: `secret@${otherDomain}` },
   });
+  // Mailboxes come back grouped by domain, and only assigned domains appear.
   const { data } = await member('/dashboard/my-emails');
-  assert.ok(data.emails.every((m) => m.domain.id === ctx.ownDomainId));
-  assert.ok(!JSON.stringify(data).includes('secret@'));
+  assert.ok(data.domains.every((d) => d.id === ctx.ownDomainId));
+  assert.ok(!JSON.stringify(data).includes('secret@'), "another user's mailbox must not appear");
 });
 
 test('a disabled account loses access immediately', async () => {

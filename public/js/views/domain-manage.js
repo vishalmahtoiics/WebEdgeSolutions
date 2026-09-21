@@ -3,6 +3,18 @@ import {
   statusBadge, sourceBadge, emptyState, formatDate, relativeTime, formatMb,
 } from '../core.js';
 import { navigate, refresh } from '../app.js';
+import {
+  createMailboxModal,
+  passwordModal,
+  deleteMailboxModal,
+  emailModal,
+} from './mailbox-modals.js';
+
+/// The tab in view, remembered across re-renders.
+///
+/// Saving a mailbox re-renders the page; without this the admin is thrown back
+/// to Overview every time and has to find their place again.
+let activeTab = { domainId: null, key: 'overview' };
 
 export async function renderDomainManage({ param, user }) {
   const data = await api(`/domains/${param}`);
@@ -71,6 +83,7 @@ export async function renderDomainManage({ param, user }) {
 
   const tabBar = el('div', { class: 'tabs' });
   const select = (key) => {
+    activeTab = { domainId: d.id, key };
     tabBar.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.key === key));
     clear(panel).append(renderPanel(key, data, isAdmin));
   };
@@ -81,7 +94,12 @@ export async function renderDomainManage({ param, user }) {
   );
 
   frag.append(tabBar, panel);
-  select('overview');
+
+  // Reopen where we were, unless this is a different domain or that tab is no
+  // longer offered (the Access tab is admin-only).
+  const remembered =
+    activeTab.domainId === d.id && tabs.some((t) => t.key === activeTab.key) ? activeTab.key : 'overview';
+  select(remembered);
   return frag;
 }
 
@@ -458,7 +476,19 @@ function emailPanel(data, isAdmin) {
       {},
       el('td', { class: 'strong break' }, m.address),
       el('td', {}, statusBadge(m.status)),
-      el('td', { class: 'small muted nowrap' }, m.usedMb != null || m.quotaMb != null ? `${formatMb(m.usedMb)} / ${formatMb(m.quotaMb)}` : '—'),
+      el(
+        'td',
+        { class: 'small nowrap' },
+        el(
+          'span',
+          { class: 'muted' },
+          m.usedMb != null || m.quotaMb != null ? `${formatMb(m.usedMb)} / ${formatMb(m.quotaMb)}` : '—',
+        ),
+        // Admins see at a glance which figures were set by hand.
+        isAdmin && (m.usesCustomQuota || m.usesCustomUsed)
+          ? el('span', { class: 'badge', style: 'margin-left:8px' }, 'Custom')
+          : null,
+      ),
       isAdmin
         ? el(
             'td',
@@ -622,202 +652,6 @@ function emailExtrasCard(domain) {
   );
 }
 
-/// Creates a real mailbox on the hosting account.
-function createMailboxModal(domain) {
-  const localPart = el('input', { type: 'text', placeholder: 'info' });
-  const password = el('input', { type: 'password', autocomplete: 'new-password' });
-  const confirm = el('input', { type: 'password', autocomplete: 'new-password' });
-  const alertHost = el('div');
-  const save = el('button', { class: 'btn primary' }, 'Create mailbox');
-
-  save.onclick = submitHandler(save, alertHost, async () => {
-    const local = localPart.value.trim().toLowerCase();
-    if (!local) throw new Error('Enter the part before the @.');
-    if (password.value !== confirm.value) throw new Error('The passwords do not match.');
-
-    const res = await api(`/domains/${domain.id}/emails/provision`, {
-      method: 'POST',
-      body: { address: `${local}@${domain.name}`, password: password.value },
-    });
-    toast(res.message, 'ok');
-    close();
-    refresh();
-  });
-
-  const close = openModal({
-    title: 'Create mailbox',
-    render: () =>
-      el(
-        'div',
-        {},
-        alertHost,
-        el(
-          'div',
-          { class: 'alert warn' },
-          'This creates a real mailbox on the mail server, not just a record in this portal.',
-        ),
-        el(
-          'div',
-          { class: 'field' },
-          el('label', {}, 'Address'),
-          el(
-            'div',
-            { style: 'display:flex;align-items:center;gap:8px' },
-            localPart,
-            el('span', { class: 'muted nowrap' }, `@${domain.name}`),
-          ),
-        ),
-        field('Password', password, 'At least 8 characters, with upper and lower case, a number and a symbol.'),
-        field('Confirm password', confirm),
-      ),
-    footer: (closeFn) => [el('button', { class: 'btn', onclick: closeFn }, 'Cancel'), save],
-  });
-}
-
-/// Sets a new password at the provider. Nothing is stored in the portal.
-function passwordModal(domainId, mailbox) {
-  const password = el('input', { type: 'password', autocomplete: 'new-password' });
-  const confirm = el('input', { type: 'password', autocomplete: 'new-password' });
-  const alertHost = el('div');
-  const save = el('button', { class: 'btn primary' }, 'Change password');
-
-  save.onclick = submitHandler(save, alertHost, async () => {
-    if (password.value !== confirm.value) throw new Error('The passwords do not match.');
-    const res = await api(`/domains/${domainId}/emails/${mailbox.id}/password`, {
-      method: 'POST',
-      body: { password: password.value },
-    });
-    toast(res.message, 'ok');
-    close();
-  });
-
-  const close = openModal({
-    title: `Password for ${mailbox.address}`,
-    render: () =>
-      el(
-        'div',
-        {},
-        alertHost,
-        el('p', { class: 'muted small', style: 'margin-top:0' }, 'The new password takes effect immediately. The portal does not keep a copy.'),
-        field('New password', password, 'At least 8 characters, with upper and lower case, a number and a symbol.'),
-        field('Confirm password', confirm),
-      ),
-    footer: (closeFn) => [el('button', { class: 'btn', onclick: closeFn }, 'Cancel'), save],
-  });
-}
-
-/// Deleting a portal record and destroying a real mailbox are very different
-/// acts, so they are presented as an explicit choice rather than one button
-/// whose meaning depends on context.
-function deleteMailboxModal(domain, mailbox, canWrite) {
-  const atProvider = canWrite && Boolean(mailbox.externalId || mailbox.isManaged);
-  const alertHost = el('div');
-
-  const removeLocal = el('button', { class: 'btn' }, 'Remove from portal only');
-  removeLocal.onclick = submitHandler(removeLocal, alertHost, async () => {
-    await api(`/domains/${domain.id}/emails/${mailbox.id}`, { method: 'DELETE' });
-    toast('Removed from the portal. The mailbox itself is untouched.', 'ok');
-    close();
-    refresh();
-  });
-
-  // Typing the address is a deliberate speed bump: this destroys real mail.
-  const confirmText = el('input', { type: 'text', placeholder: mailbox.address, autocomplete: 'off' });
-  const destroy = el('button', { class: 'btn danger', disabled: true }, 'Delete permanently');
-  confirmText.oninput = () => {
-    destroy.disabled = confirmText.value.trim().toLowerCase() !== mailbox.address.toLowerCase();
-  };
-  destroy.onclick = submitHandler(destroy, alertHost, async () => {
-    const res = await api(`/domains/${domain.id}/emails/${mailbox.id}/destroy`, { method: 'DELETE' });
-    toast(res.message, 'ok');
-    close();
-    refresh();
-  });
-
-  const close = openModal({
-    title: `Delete ${mailbox.address}`,
-    render: () =>
-      el(
-        'div',
-        {},
-        alertHost,
-        !atProvider
-          ? el(
-              'p',
-              { class: 'muted', style: 'margin-top:0' },
-              'This mailbox exists only as a record in this portal, so removing it changes nothing on the mail server.',
-            )
-          : el(
-              'div',
-              {},
-              el(
-                'p',
-                { style: 'margin-top:0' },
-                'This is a live mailbox. Choose what should happen:',
-              ),
-              el(
-                'div',
-                { class: 'alert danger', style: 'background:#fdeceb;color:#c02626;border-color:#f5cecb' },
-                el('strong', {}, 'Delete permanently'),
-                ' destroys the mailbox and every message in it. This cannot be undone.',
-              ),
-              field('Type the address to confirm permanent deletion', confirmText),
-            ),
-      ),
-    footer: (closeFn) => [
-      el('button', { class: 'btn ghost', onclick: closeFn }, 'Cancel'),
-      atProvider ? removeLocal : null,
-      atProvider ? destroy : el('button', { class: 'btn danger', onclick: () => removeLocal.click() }, 'Remove'),
-    ],
-  });
-}
-
-function emailModal(domainId, mailbox = null) {
-  const address = el('input', { type: 'email', value: mailbox?.address || '' });
-  const status = el(
-    'select',
-    {},
-    ['active', 'suspended', 'pending'].map((s) =>
-      el('option', { value: s, selected: mailbox?.status === s }, s[0].toUpperCase() + s.slice(1)),
-    ),
-  );
-  const quotaMb = el('input', { type: 'number', value: mailbox?.quotaMb ?? '', min: 0 });
-  const usedMb = el('input', { type: 'number', value: mailbox?.usedMb ?? '', min: 0 });
-  const notes = el('textarea', {}, mailbox?.notes || '');
-
-  const alertHost = el('div');
-  const save = el('button', { class: 'btn primary' }, mailbox ? 'Save mailbox' : 'Add mailbox');
-
-  save.onclick = submitHandler(save, alertHost, async () => {
-    const body = {
-      address: address.value.trim().toLowerCase(),
-      status: status.value,
-      quotaMb: quotaMb.value === '' ? null : Number(quotaMb.value),
-      usedMb: usedMb.value === '' ? null : Number(usedMb.value),
-      notes: notes.value.trim(),
-    };
-    const path = mailbox ? `/domains/${domainId}/emails/${mailbox.id}` : `/domains/${domainId}/emails`;
-    await api(path, { method: mailbox ? 'PUT' : 'POST', body });
-    toast(mailbox ? 'Mailbox updated.' : 'Mailbox added.', 'ok');
-    close();
-    refresh();
-  });
-
-  const close = openModal({
-    title: mailbox ? 'Edit Mailbox' : 'Add Mailbox',
-    render: () =>
-      el(
-        'div',
-        {},
-        alertHost,
-        field('Email address', address),
-        field('Status', status),
-        el('div', { class: 'form-row' }, field('Quota (MB)', quotaMb), field('Used (MB)', usedMb)),
-        field('Notes', notes),
-      ),
-    footer: (closeFn) => [el('button', { class: 'btn', onclick: closeFn }, 'Cancel'), save],
-  });
-}
 
 // ---------------------------------------------------------------------------
 // FTP / server settings (always manual)

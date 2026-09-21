@@ -101,7 +101,12 @@ export async function syncDnsRecords(domain) {
   return { supported: true, count: records.length };
 }
 
-/// Same contract as DNS: provider mailboxes are refreshed, manual ones stay.
+/// Refreshes the mailbox list from the provider.
+///
+/// Rows are updated in place rather than deleted and recreated, because a
+/// mailbox row now carries administrator decisions — a custom size, a custom
+/// usage figure, notes — that must survive every sync. Only the
+/// provider-reported values and status are touched here.
 export async function syncEmailAccounts(domain) {
   if (!domain.providerId) return { supported: false, count: 0 };
 
@@ -111,33 +116,42 @@ export async function syncEmailAccounts(domain) {
   if (result.error) return { supported: true, error: result.error, count: 0 };
 
   const mailboxes = result.data || [];
-  const manual = await prisma.emailAccount.findMany({
-    where: { domainId: domain.id, isFromProvider: false },
-    select: { address: true },
-  });
-  const manualAddresses = new Set(manual.map((m) => m.address.toLowerCase()));
+  const seen = new Set();
 
-  await prisma.emailAccount.deleteMany({ where: { domainId: domain.id, isFromProvider: true } });
+  for (const m of mailboxes) {
+    const address = String(m.address).toLowerCase();
+    seen.add(address);
 
-  // A mailbox the admin had entered by hand and that now exists upstream stays
-  // as the manual row, so their notes and quota edits are not lost.
-  const fresh = mailboxes.filter((m) => !manualAddresses.has(String(m.address).toLowerCase()));
-  if (fresh.length) {
-    await prisma.emailAccount.createMany({
-      data: fresh.map((m) => ({
+    await prisma.emailAccount.upsert({
+      where: { domainId_address: { domainId: domain.id, address } },
+      create: {
         domainId: domain.id,
-        address: m.address,
+        address,
         status: m.status || 'unknown',
         externalId: m.externalId ?? null,
-        quotaMb: m.quotaMb ?? null,
-        usedMb: m.usedMb ?? null,
+        providerQuotaMb: m.quotaMb ?? null,
+        providerUsedMb: m.usedMb ?? null,
         isFromProvider: true,
-      })),
-      skipDuplicates: true,
+      },
+      // Overrides and notes are deliberately absent: an administrator's
+      // choices are not the provider's to overwrite.
+      update: {
+        status: m.status || 'unknown',
+        externalId: m.externalId ?? null,
+        providerQuotaMb: m.quotaMb ?? null,
+        providerUsedMb: m.usedMb ?? null,
+        isFromProvider: true,
+      },
     });
   }
 
-  return { supported: true, count: fresh.length };
+  // A mailbox that has disappeared upstream is removed, unless it was entered
+  // by hand — that row is the administrator's own record, not a stale copy.
+  await prisma.emailAccount.deleteMany({
+    where: { domainId: domain.id, isFromProvider: true, address: { notIn: [...seen] } },
+  });
+
+  return { supported: true, count: mailboxes.length };
 }
 
 /// Refreshes one domain's DNS records and mailboxes from its provider.

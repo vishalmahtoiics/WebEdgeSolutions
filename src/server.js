@@ -47,7 +47,9 @@ app.use(
     store: new PgStore({
       conString: config.databaseUrl,
       tableName: 'user_sessions',
-      createTableIfMissing: true,
+      // The table is created by a migration, so the schema stays the single
+      // source of truth and `prisma migrate` sees no drift.
+      createTableIfMissing: false,
     }),
     secret: config.sessionSecret,
     resave: false,

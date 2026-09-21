@@ -308,10 +308,38 @@ domainsRouter.post(
 const emailSchema = z.object({
   address: z.string().trim().toLowerCase().email('Enter a valid email address.'),
   status: z.string().trim().max(40).optional().default('active'),
+  // Each figure is either the provider's own or one an administrator typed.
+  // `useReal*` true clears the override so the real value shows again and
+  // keeps tracking every sync.
+  useRealQuota: z.boolean().optional(),
+  useRealUsed: z.boolean().optional(),
   quotaMb: z.coerce.number().int().min(0).nullish(),
   usedMb: z.coerce.number().int().min(0).nullish(),
   notes: z.string().max(1000).optional(),
 });
+
+/// Turns the dialog's "real or custom" choice into stored columns.
+///
+/// A mailbox the provider does not know about has no real value to fall back
+/// on, so whatever is typed is stored as the override and also seeded as the
+/// provider figure — otherwise the row would read as empty.
+function mailboxValues(body, { hasProvider }) {
+  const quotaCustom = body.useRealQuota === true ? null : body.quotaMb ?? null;
+  const usedCustom = body.useRealUsed === true ? null : body.usedMb ?? null;
+
+  const data = {
+    status: body.status,
+    notes: body.notes === '' ? null : body.notes,
+    quotaMbOverride: quotaCustom,
+    usedMbOverride: usedCustom,
+  };
+
+  if (!hasProvider) {
+    data.providerQuotaMb = quotaCustom;
+    data.providerUsedMb = usedCustom;
+  }
+  return data;
+}
 
 domainsRouter.post(
   '/:id/emails',
@@ -324,9 +352,14 @@ domainsRouter.post(
     if (exists) throw badRequest('That mailbox is already listed for this domain.');
 
     const email = await prisma.emailAccount.create({
-      data: { domainId: req.domain.id, ...blankToNull(req.body), isFromProvider: false },
+      data: {
+        domainId: req.domain.id,
+        address: req.body.address,
+        isFromProvider: false,
+        ...mailboxValues(req.body, { hasProvider: false }),
+      },
     });
-    res.status(201).json({ email });
+    res.status(201).json({ email: presentEmailAccount(email, isAdmin(req.user)) });
   }),
 );
 
@@ -340,11 +373,16 @@ domainsRouter.put(
     });
     if (!existing) throw notFound('Mailbox not found.');
 
+    // Editing no longer detaches the row from the provider: the real values
+    // keep refreshing underneath whatever an administrator chose to display.
     const email = await prisma.emailAccount.update({
       where: { id: existing.id },
-      data: { ...blankToNull(req.body), isFromProvider: false },
+      data: {
+        address: req.body.address,
+        ...mailboxValues(req.body, { hasProvider: Boolean(existing.externalId) }),
+      },
     });
-    res.json({ email });
+    res.json({ email: presentEmailAccount(email, isAdmin(req.user)) });
   }),
 );
 
@@ -407,13 +445,16 @@ domainsRouter.post(
         address: created.address || address,
         status: created.status || 'active',
         externalId: created.externalId ?? null,
-        quotaMb: created.quotaMb ?? null,
-        usedMb: created.usedMb ?? null,
+        providerQuotaMb: created.quotaMb ?? null,
+        providerUsedMb: created.usedMb ?? null,
         isFromProvider: true,
       },
     });
 
-    res.status(201).json({ email, message: `${email.address} created at the provider.` });
+    res.status(201).json({
+      email: presentEmailAccount(email, isAdmin(req.user)),
+      message: `${email.address} created at the provider.`,
+    });
   }),
 );
 

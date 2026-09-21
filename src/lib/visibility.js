@@ -74,21 +74,43 @@ export function presentDnsRecord(record, isAdmin) {
   return isAdmin ? { ...base, isFromProvider: record.isFromProvider } : base;
 }
 
-/// Mailbox. For users the upstream id becomes a plain `isManaged` flag, so the
-/// UI still knows a password can be set without exposing the provider's id.
+/// Mailbox.
+///
+/// `quotaMb` and `usedMb` are the effective figures — an administrator's
+/// override where one is set, otherwise what the provider reported. Everyone
+/// sees those. Only an administrator additionally sees the two apart, which is
+/// what the edit dialog needs to offer "real" against "custom".
+///
+/// For users the upstream id becomes a plain `isManaged` flag, so the UI still
+/// knows a password can be set without exposing the provider's id.
 export function presentEmailAccount(email, isAdmin) {
+  const quotaMb = email.quotaMbOverride ?? email.providerQuotaMb;
+  const usedMb = email.usedMbOverride ?? email.providerUsedMb;
+
   const base = {
     id: email.id,
     address: email.address,
     status: email.status,
-    quotaMb: email.quotaMb,
-    usedMb: email.usedMb,
+    quotaMb,
+    usedMb,
     notes: email.notes,
     isManaged: Boolean(email.externalId),
   };
-  return isAdmin
-    ? { ...base, isFromProvider: email.isFromProvider, externalId: email.externalId }
-    : base;
+
+  if (!isAdmin) return base;
+
+  return {
+    ...base,
+    isFromProvider: email.isFromProvider,
+    externalId: email.externalId,
+    // What the provider actually reports, kept even while an override is shown.
+    providerQuotaMb: email.providerQuotaMb,
+    providerUsedMb: email.providerUsedMb,
+    quotaMbOverride: email.quotaMbOverride,
+    usedMbOverride: email.usedMbOverride,
+    usesCustomQuota: email.quotaMbOverride !== null && email.quotaMbOverride !== undefined,
+    usesCustomUsed: email.usedMbOverride !== null && email.usedMbOverride !== undefined,
+  };
 }
 
 /// Feature flags for the manage page. A user gets only what changes the UI;
