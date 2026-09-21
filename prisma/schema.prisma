@@ -73,10 +73,10 @@ model Provider {
   updatedAt DateTime @updatedAt
 
   // Result of the most recent "Test Connection" click.
-  lastTestedAt     DateTime?
-  lastTestOk       Boolean?
-  lastTestMessage  String?
-  lastSyncedAt     DateTime?
+  lastTestedAt    DateTime?
+  lastTestOk      Boolean?
+  lastTestMessage String?
+  lastSyncedAt    DateTime?
 
   credential ProviderCredential?
   domains    Domain[]
@@ -113,16 +113,36 @@ model Domain {
   /// Provider's own identifier, used to match records on re-sync.
   externalId String?
 
-  status     String    @default("unknown")
-  type       String?
-  expiresAt  DateTime?
+  status       String    @default("unknown")
+  type         String?
+  expiresAt    DateTime?
   registeredAt DateTime?
   lastSyncedAt DateTime?
+
+  /// What the site was last detected to be built on, and the evidence for it.
+  /// Refreshed on every detection and never hand-edited, the same way mailbox
+  /// figures are, so the real answer survives an administrator choosing to
+  /// display something else.
+  detectedTech         String?
+  detectedTechVersion  String?
+  /// "files" (read off the site's own filesystem) or "site" (read off the
+  /// homepage). Which one it was changes how much the answer is worth.
+  detectedTechSource   String?
+  /// Why the detector concluded this, in words, e.g. "found wp-config.php".
+  detectedTechEvidence String?
+  /// "confirmed" or "likely".
+  detectedTechLevel    String?
+  detectedTechAt       DateTime?
+
+  /// Administrator override. Null means "use what was detected", which is why
+  /// it is nullable rather than defaulted — absent is meaningful here.
+  techOverride        String?
+  techVersionOverride String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  provider      Provider?      @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  provider      Provider?       @relation(fields: [providerId], references: [id], onDelete: SetNull)
   dnsRecords    DnsRecord[]
   emailAccounts EmailAccount[]
   settings      DomainSettings?

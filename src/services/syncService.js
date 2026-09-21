@@ -1,6 +1,7 @@
 import { prisma } from '../db.js';
 import { tryCapability } from '../providers/index.js';
 import { loadProviderWithToken } from './providerService.js';
+import { detectAndStore } from './technologyService.js';
 
 /// Pulls domains from a provider into the local database.
 ///
@@ -154,12 +155,13 @@ export async function syncEmailAccounts(domain) {
   return { supported: true, count: mailboxes.length };
 }
 
-/// Refreshes one domain's DNS records and mailboxes from its provider.
+/// Refreshes one domain's DNS records, mailboxes, and what its site is built on.
 ///
 /// Each part is reported separately and a failure in one does not stop the
-/// other: a domain with a DNS zone but no email plan should still get its DNS.
+/// others: a domain with a DNS zone but no email plan should still get its DNS,
+/// and a site that is down should not cost it either.
 export async function refreshDomain(domain) {
-  const result = { dns: null, emails: null };
+  const result = { dns: null, emails: null, technology: null };
 
   try {
     const dns = await syncDnsRecords(domain);
@@ -176,6 +178,14 @@ export async function refreshDomain(domain) {
   } catch (err) {
     result.emails = { ok: false, error: err.message };
   }
+
+  // Detection reaches out to the site's own filesystem or its homepage, neither
+  // of which is the provider's business, so it runs for manually added domains
+  // too — and never reports a failure as a problem with the refresh.
+  const tech = await detectAndStore(domain);
+  result.technology = tech.ok
+    ? { ok: true, name: tech.technology.name, version: tech.technology.version }
+    : { ok: false, attempts: tech.attempts };
 
   return result;
 }
@@ -197,12 +207,14 @@ export async function syncEverything(providerId) {
   const details = [];
   let dnsRecords = 0;
   let mailboxes = 0;
+  let identified = 0;
   const failures = [];
 
   for (const domain of domains) {
     const result = await refreshDomain(domain);
     if (result.dns?.ok) dnsRecords += result.dns.count || 0;
     if (result.emails?.ok) mailboxes += result.emails.count || 0;
+    if (result.technology?.ok) identified += 1;
 
     const problems = [result.dns?.error, result.emails?.error].filter(Boolean);
     if (problems.length) failures.push({ domain: domain.name, problems });
@@ -211,6 +223,7 @@ export async function syncEverything(providerId) {
       domain: domain.name,
       dnsCount: result.dns?.ok ? result.dns.count : null,
       emailCount: result.emails?.ok ? result.emails.count : null,
+      technology: result.technology?.ok ? result.technology.name : null,
       problems,
     });
   }
@@ -220,6 +233,9 @@ export async function syncEverything(providerId) {
     domainsProcessed: domains.length,
     dnsRecords,
     mailboxes,
+    // How many sites the detector could actually name. Not a failure count:
+    // a domain that is parked or has no file access simply has no answer.
+    identified,
     failures,
     details,
   };

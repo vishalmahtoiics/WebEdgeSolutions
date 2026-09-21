@@ -1,6 +1,7 @@
 import {
-  api, el, clear, field, submitHandler, toast, openModal, confirmModal,
-  statusBadge, sourceBadge, emptyState, formatDate, relativeTime, formatMb,
+  api, el, clear, appendAll, field, submitHandler, toast, openModal, confirmModal,
+  statusBadge, sourceBadge, techBadge, TECH_SOURCE_LABEL,
+  emptyState, formatDate, relativeTime, formatMb,
 } from '../core.js';
 import { navigate, refresh } from '../app.js';
 import { filesPanel } from './files.js';
@@ -139,6 +140,148 @@ function renderPanel(key, data, isAdmin) {
 // Overview
 // ---------------------------------------------------------------------------
 
+/// What the site is built on, with the evidence in plain sight.
+///
+/// The evidence line is the point of this card. "WordPress" alone is a claim;
+/// "WordPress — found wp-config.php and wp-includes/version.php" is something
+/// the reader can check for themselves.
+function technologyCard(d, isAdmin) {
+  const tech = d.technology;
+
+  const detectBtn = el('button', { class: 'btn sm' }, 'Detect now');
+  detectBtn.onclick = async () => {
+    detectBtn.disabled = true;
+    const label = detectBtn.textContent;
+    clear(detectBtn).append(el('span', { class: 'spinner' }), 'Checking…');
+    try {
+      const res = await api(`/domains/${d.id}/technology/detect`, { method: 'POST' });
+      toast(res.message, res.ok ? 'ok' : '');
+      refresh();
+    } catch (err) {
+      toast(err.message, 'error');
+      detectBtn.disabled = false;
+      clear(detectBtn).append(label);
+    }
+  };
+
+  const body = el('div', { class: 'card-body' });
+
+  if (!tech) {
+    body.append(
+      el('div', { class: 'muted small' }, 'Not detected yet. Press Detect now to look.'),
+    );
+  } else {
+    const rows = [
+      ['Built with', el('span', { class: 'strong' }, tech.name)],
+      ['Version', tech.version ? el('span', { class: 'mono' }, tech.version) : el('span', { class: 'muted small' }, 'Not determined')],
+      ['How we know', el('span', { class: 'small' }, TECH_SOURCE_LABEL[tech.source] || 'unknown')],
+      ['Last checked', relativeTime(tech.checkedAt)],
+    ];
+
+    appendAll(body, [
+      el('dl', { class: 'dl' }, rows.map(([label, node]) => el('div', {}, el('dt', {}, label), el('dd', {}, node)))),
+      tech.evidence
+        ? el(
+            'div',
+            { class: 'alert info', style: 'margin:16px 0 0' },
+            tech.source === 'manual'
+              ? 'This value was entered by hand, so it is whatever your administrator says it is.'
+              : tech.confidence === 'likely'
+                ? `Best guess: ${tech.evidence}. That is evidence rather than proof — set it by hand if it is wrong.`
+                : `Confirmed: ${tech.evidence}.`,
+          )
+        : null,
+      isAdmin && d.usesCustomTech && d.detectedTech
+        ? el(
+            'div',
+            { class: 'alert warn', style: 'margin:12px 0 0' },
+            `Showing your custom value. Detection last found ${d.detectedTech}${
+              d.detectedTechVersion ? ` ${d.detectedTechVersion}` : ''
+            }.`,
+          )
+        : null,
+    ]);
+  }
+
+  return el(
+    'div',
+    { class: 'card' },
+    el(
+      'div',
+      { class: 'card-head' },
+      el(
+        'div',
+        { class: 'grow' },
+        el('h2', {}, 'Technology'),
+        el('p', {}, 'What this website is built on.'),
+      ),
+      detectBtn,
+      isAdmin ? el('button', { class: 'btn sm', onclick: () => technologyModal(d) }, 'Edit') : null,
+    ),
+    body,
+  );
+}
+
+/// The administrator's override, offered the same way mailbox figures are:
+/// the detected value on one side, a custom value on the other, and a plain
+/// statement of which one people will see.
+function technologyModal(d) {
+  const useCustom = el('input', { type: 'checkbox', checked: Boolean(d.usesCustomTech) });
+  const name = el('input', { type: 'text', value: d.techOverride || '', placeholder: 'e.g. WordPress' });
+  const version = el('input', { type: 'text', value: d.techVersionOverride || '', placeholder: 'e.g. 6.5.2' });
+  const alertHost = el('div', {});
+
+  const detected = d.detectedTech
+    ? `${d.detectedTech}${d.detectedTechVersion ? ` ${d.detectedTechVersion}` : ''}`
+    : 'nothing yet';
+
+  const sync = () => {
+    const custom = useCustom.checked;
+    name.disabled = !custom;
+    version.disabled = !custom;
+  };
+  useCustom.onchange = sync;
+  sync();
+
+  openModal({
+    title: 'Technology',
+    render: () =>
+      el(
+        'form',
+        { onsubmit: (e) => e.preventDefault() },
+        alertHost,
+        el(
+          'div',
+          { class: 'alert info', style: 'margin-bottom:16px' },
+          `Detection found ${detected}${d.detectedTechEvidence ? ` — ${d.detectedTechEvidence}` : ''}.`,
+        ),
+        el(
+          'label',
+          { class: 'check' },
+          useCustom,
+          el('span', {}, 'Show a custom value instead of what was detected'),
+        ),
+        field('Technology', name, 'Leave the box above unticked to go back to the detected value.'),
+        field('Version', version, 'Optional.'),
+      ),
+    footer: (close) => {
+      const save = el('button', { class: 'btn primary' }, 'Save');
+      save.onclick = submitHandler(save, alertHost, async () => {
+        const res = await api(`/domains/${d.id}/technology`, {
+          method: 'PUT',
+          body: useCustom.checked
+            ? { name: name.value.trim(), version: version.value.trim() }
+            : { name: '', version: '' },
+        });
+        close();
+        toast(res.message, 'ok');
+        refresh();
+      });
+      return [el('button', { class: 'btn', onclick: close }, 'Cancel'), save];
+    },
+  });
+}
+
 function overviewPanel(data, isAdmin) {
   const d = data.domain;
 
@@ -259,6 +402,7 @@ function overviewPanel(data, isAdmin) {
       ),
       liveHost,
     ),
+    technologyCard(d, isAdmin),
   );
 }
 

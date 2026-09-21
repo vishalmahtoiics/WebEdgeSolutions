@@ -255,6 +255,54 @@ Normal users see only the effective figure — never the two apart.
 
 ---
 
+## What a site is built on
+
+Every domain shows the technology behind it — WordPress, Laravel, a hand-built
+static site — on the domains list and on its own page.
+
+**The provider API does not report this.** Hostinger's websites endpoint returns
+a domain, a hosting username and an order id, and nothing about the platform. So
+this is worked out for real, from one of three places, and the answer always
+carries the evidence that produced it:
+
+| Where | What it reads | Shown as |
+| --- | --- | --- |
+| **Files** | The site's own filesystem, over the FTP or SFTP credentials already stored. `wp-config.php` in the web root is not an inference; `wp-includes/version.php` gives the exact release. | Confirmed |
+| **Site** | The homepage, for domains with no file access saved: the generator tag, the asset paths, and response headers like `x-shopid` or `x-drupal-cache`. | Confirmed for a generator tag, otherwise Likely |
+| **By hand** | Whatever a Super Admin types. | Set by your administrator |
+
+Files are tried first because they prove it; the homepage is the fallback. A
+domain with neither says so, naming what it tried, rather than showing a blank.
+
+Recognised from the filesystem: WordPress, Drupal, Joomla, Magento, PrestaShop,
+OpenCart, Laravel and Next.js, each with its version where the install records
+one, plus plain PHP and static sites. From the homepage, also Shopify, Wix,
+Squarespace, Webflow, Ghost, TYPO3, Hugo, Jekyll and Gatsby.
+
+Detection runs inside **Sync Everything** and inside **Refresh**, so it keeps
+itself current, and there is a **Detect now** button for checking on the spot.
+It never fails either action: a site that is down or an FTP password that has
+gone stale leaves the previous answer alone and only moves the "last checked"
+time.
+
+### Overriding it
+
+A Super Admin can set the technology by hand, the same way mailbox figures work:
+detection writes only the detected columns, so an override survives every later
+sync, and clearing it reveals the detected value again unchanged. While an
+override is showing, the admin's own view says what detection last found.
+
+Users see the technology for their own domains, because it describes their
+website. They do not see the override controls, and nothing in the answer names
+a hosting provider.
+
+> The portal only ever fetches public host names over http or https. Addresses
+> that are not on the public web — IP literals, `localhost`, `.local`,
+> `.internal` — are refused, redirects are capped at three, and no more than
+> 256 KB of a page is read.
+
+---
+
 ## File manager
 
 Once a domain has FTP details under **FTP & Server**, the **Files** tab browses
@@ -456,7 +504,7 @@ scripts/
 src/
   server.js            Express app and middleware
   config.js            Environment configuration
-  lib/                 Encryption, error helpers
+  lib/                 Encryption, storage, mail, technology detection, helpers
   middleware/          Authentication, authorization, validation
   providers/           Pluggable provider adapters (hostinger.js)
   routes/              API endpoints

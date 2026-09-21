@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process';
 import { PrismaClient } from '@prisma/client';
 
 const TOKEN = 'stub-token';
-const PORT = 3994;
+const PORT = 3995;
 const BASE = `http://127.0.0.1:${PORT}`;
 const prisma = new PrismaClient();
 

@@ -157,8 +157,8 @@ providersRouter.post(
   }),
 );
 
-/// One click: domains, then DNS and mailboxes for every domain, all saved
-/// locally. Safe to repeat — nothing is duplicated.
+/// One click: domains, then DNS, mailboxes and what each site is built on,
+/// all saved locally. Safe to repeat — nothing is duplicated.
 providersRouter.post(
   '/:id/sync-all',
   asyncHandler(async (req, res) => {
@@ -169,6 +169,7 @@ providersRouter.post(
       `${d.total} domain${d.total === 1 ? '' : 's'} (${d.imported} added, ${d.updated} updated${d.skipped ? `, ${d.skipped} skipped` : ''})`,
       `${summary.dnsRecords} DNS record${summary.dnsRecords === 1 ? '' : 's'}`,
       `${summary.mailboxes} mailbox${summary.mailboxes === 1 ? '' : 'es'}`,
+      `${summary.identified} site${summary.identified === 1 ? '' : 's'} identified`,
     ];
 
     res.json({

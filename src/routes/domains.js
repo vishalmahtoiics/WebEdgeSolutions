@@ -8,6 +8,7 @@ import { getAdapter, tryCapability } from '../providers/index.js';
 import { encrypt, decryptMaybe, tokenHint } from '../lib/crypto.js';
 import { loadProviderWithToken } from '../services/providerService.js';
 import { syncDnsRecords, syncEmailAccounts, refreshDomain } from '../services/syncService.js';
+import { detectAndStore } from '../services/technologyService.js';
 import { filesRouter } from './files.js';
 import { webmailRouter } from './webmail.js';
 import {
@@ -16,6 +17,7 @@ import {
   presentDnsRecord,
   presentEmailAccount,
   presentCapabilities,
+  presentTechnology,
 } from '../lib/visibility.js';
 
 export const domainsRouter = Router();
@@ -184,6 +186,7 @@ domainsRouter.post(
     const parts = [];
     if (result.dns?.ok) parts.push(`${result.dns.count} DNS record${result.dns.count === 1 ? '' : 's'}`);
     if (result.emails?.ok) parts.push(`${result.emails.count} mailbox${result.emails.count === 1 ? '' : 'es'}`);
+    if (result.technology?.ok) parts.push(`the site is ${result.technology.name}`);
 
     const problems = [result.dns?.error, result.emails?.error].filter(Boolean);
     if (!parts.length && problems.length) {
@@ -196,7 +199,80 @@ domainsRouter.post(
       ok: true,
       dns: result.dns,
       emails: result.emails,
+      technology: result.technology,
       message: parts.length ? `Refreshed ${parts.join(' and ')}.` : 'Nothing new to load.',
+    });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// What the site is built on
+// ---------------------------------------------------------------------------
+
+/// Works out what this site is built on, now.
+///
+/// Open to anyone who can reach the domain, because it reports on their own
+/// site: it reads their files over the FTP credentials already stored, or their
+/// own homepage. Neither answer says anything about who hosts it.
+domainsRouter.post(
+  '/:id/technology/detect',
+  withDomain({ settings: true }),
+  asyncHandler(async (req, res) => {
+    const result = await detectAndStore(req.domain);
+
+    if (!result.ok) {
+      // Explain what was tried rather than shrugging. "No file access is
+      // configured" is something the reader can act on; "failed" is not.
+      const reasons = (result.attempts || []).map((a) => a.message).filter(Boolean);
+      return res.json({
+        ok: false,
+        technology: null,
+        attempts: result.attempts || [],
+        message: reasons.length
+          ? `Could not tell what this site is built on. ${reasons.join(' ')}`
+          : 'Could not tell what this site is built on.',
+      });
+    }
+
+    const { name, version, evidence } = result.technology;
+    res.json({
+      ok: true,
+      technology: presentTechnology(result.domain),
+      message: `This site is ${name}${version ? ` ${version}` : ''} — ${evidence}.`,
+    });
+  }),
+);
+
+const technologySchema = z.object({
+  // Empty clears the override and hands the row back to whatever was detected.
+  name: z.string().trim().max(60).optional(),
+  version: z.string().trim().max(40).optional(),
+});
+
+/// Sets or clears the administrator's own answer.
+///
+/// Detection never writes these columns, so an override survives every later
+/// sync — and clearing it reveals the detected value again, unchanged.
+domainsRouter.put(
+  '/:id/technology',
+  requireAdmin,
+  withDomain(),
+  validate(technologySchema),
+  asyncHandler(async (req, res) => {
+    const name = req.body.name || null;
+    const domain = await prisma.domain.update({
+      where: { id: req.domain.id },
+      data: {
+        techOverride: name,
+        // A version with no name to attach it to would be stranded.
+        techVersionOverride: name ? req.body.version || null : null,
+      },
+    });
+
+    res.json({
+      ok: true,
+      technology: presentTechnology(domain),
+      message: name ? 'Technology updated.' : 'Now showing the detected technology.',
     });
   }),
 );

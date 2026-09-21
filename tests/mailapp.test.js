@@ -12,7 +12,7 @@ import { SMTPServer } from 'smtp-server';
 import { simpleParser } from 'mailparser';
 import { PrismaClient } from '@prisma/client';
 
-const PORT = 3992;
+const PORT = 3993;
 const BASE = `http://127.0.0.1:${PORT}`;
 const MAILBOX_PASSWORD = 'Webmail!Pass123';
 const prisma = new PrismaClient();

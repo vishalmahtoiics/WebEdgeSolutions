@@ -53,7 +53,11 @@ export function el(tag, props = {}, ...children) {
   return node;
 }
 
-function appendAll(node, children) {
+/// Appends children with the same rules `el` uses: arrays are flattened and
+/// null/false are skipped. `Node.append` does neither — it stringifies an array
+/// and writes a literal "null" into the page — so anything built conditionally
+/// goes through here rather than straight to `.append`.
+export function appendAll(node, children) {
   for (const child of children.flat(Infinity)) {
     if (child === null || child === undefined || child === false || child === true) continue;
     node.append(child instanceof Node ? child : document.createTextNode(String(child)));
@@ -64,6 +68,9 @@ export const clear = (node) => {
   while (node.firstChild) node.removeChild(node.firstChild);
   return node;
 };
+
+/// Replaces a node's contents, with the same child rules as `el`.
+export const fill = (node, ...children) => appendAll(clear(node), children);
 
 // --- Formatting ------------------------------------------------------------
 
@@ -116,6 +123,27 @@ export function statusBadge(status) {
 
 export const sourceBadge = (label, source) =>
   el('span', { class: `badge ${source === 'MANUAL' ? '' : 'accent'}` }, label);
+
+/// A technology chip. "Likely" is drawn plainer than "confirmed", because the
+/// difference between reading wp-config.php and inferring from a URL is real
+/// and the reader deserves to see it at a glance.
+export function techBadge(technology) {
+  if (!technology?.name) return el('span', { class: 'small muted' }, '—');
+
+  const label = technology.version ? `${technology.name} ${technology.version}` : technology.name;
+  const tone = technology.confidence === 'likely' ? '' : 'accent';
+  const badge = el('span', { class: `badge ${tone}` }, label);
+
+  if (technology.evidence) badge.title = technology.evidence;
+  return badge;
+}
+
+/// Where an answer came from, in the reader's terms. Never names a provider.
+export const TECH_SOURCE_LABEL = {
+  files: 'read from your site\u2019s files',
+  site: 'read from your homepage',
+  manual: 'set by your administrator',
+};
 
 export const initials = (name = '') =>
   name.trim().split(/\s+/).slice(0, 2).map((p) => p[0]?.toUpperCase() || '').join('') || '?';

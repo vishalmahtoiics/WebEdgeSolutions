@@ -9,6 +9,49 @@
 // things in the browser: a user reading the network tab must not learn the
 // provider either.
 
+/// What a site is built on.
+///
+/// The effective answer is the administrator's override where one is set,
+/// otherwise what was detected. Everyone sees that, along with the evidence:
+/// a technology name with nothing behind it is worth no more than a guess, and
+/// the evidence describes the customer's own site, never who hosts it.
+///
+/// `source` stays deliberately plain — "files" means the site's own filesystem
+/// and "site" means its homepage. Neither names a provider.
+export function presentTechnology(domain) {
+  const override = domain.techOverride;
+  const isCustom = Boolean(override);
+
+  const name = override || domain.detectedTech || null;
+  if (!name) return null;
+
+  return {
+    name,
+    version: (isCustom ? domain.techVersionOverride : domain.detectedTechVersion) || null,
+    source: isCustom ? 'manual' : domain.detectedTechSource || null,
+    evidence: isCustom ? 'Set by your administrator' : domain.detectedTechEvidence || null,
+    confidence: isCustom ? 'confirmed' : domain.detectedTechLevel || null,
+    checkedAt: domain.detectedTechAt || null,
+  };
+}
+
+/// The same, plus what the detector found underneath an override, which is what
+/// the edit dialog needs to offer "detected" against "custom".
+function adminTechnology(domain) {
+  return {
+    technology: presentTechnology(domain),
+    detectedTech: domain.detectedTech || null,
+    detectedTechVersion: domain.detectedTechVersion || null,
+    detectedTechSource: domain.detectedTechSource || null,
+    detectedTechEvidence: domain.detectedTechEvidence || null,
+    detectedTechLevel: domain.detectedTechLevel || null,
+    detectedTechAt: domain.detectedTechAt || null,
+    techOverride: domain.techOverride || null,
+    techVersionOverride: domain.techVersionOverride || null,
+    usesCustomTech: Boolean(domain.techOverride),
+  };
+}
+
 /// Domain row for a list view.
 export function presentDomainSummary(domain, isAdmin) {
   const base = {
@@ -23,6 +66,7 @@ export function presentDomainSummary(domain, isAdmin) {
     // Whether this domain can be refreshed from upstream. Deliberately a plain
     // boolean: it says an action is possible, not who provides it.
     canRefresh: Boolean(domain.providerId),
+    technology: presentTechnology(domain),
   };
 
   if (!isAdmin) return base;
@@ -48,12 +92,14 @@ export function presentDomainDetail(domain, isAdmin) {
     lastSyncedAt: domain.lastSyncedAt,
     createdAt: domain.createdAt,
     canRefresh: Boolean(domain.providerId),
+    technology: presentTechnology(domain),
   };
 
   if (!isAdmin) return base;
 
   return {
     ...base,
+    ...adminTechnology(domain),
     source: domain.source,
     sourceLabel: domain.source === 'MANUAL' ? 'Manually Added' : domain.provider?.name || 'Provider',
     provider: domain.provider,

@@ -1,5 +1,5 @@
 import {
-  api, el, field, submitHandler, toast, openModal, statusBadge, sourceBadge,
+  api, el, field, submitHandler, toast, openModal, statusBadge, sourceBadge, techBadge,
   emptyState, formatDate,
 } from '../core.js';
 import { refresh, navigate } from '../app.js';
@@ -59,7 +59,7 @@ export async function renderDomains({ user }) {
 
   const search = el('input', {
     type: 'text',
-    placeholder: 'Search domains…',
+    placeholder: 'Search domains or technology…',
     style: 'max-width:280px',
   });
 
@@ -73,6 +73,7 @@ export async function renderDomains({ user }) {
           el('td', {}, el('div', { class: 'strong' }, d.name)),
           isAdmin ? el('td', {}, sourceBadge(d.sourceLabel, d.source)) : null,
           el('td', {}, statusBadge(d.status)),
+          el('td', {}, techBadge(d.technology)),
           el('td', { class: 'small muted nowrap' }, formatDate(d.expiresAt)),
           el('td', { class: 'small' }, String(d.emailCount)),
           isAdmin ? el('td', { class: 'small' }, String(d.userCount)) : null,
@@ -95,13 +96,19 @@ export async function renderDomains({ user }) {
       ),
     );
     if (!list.length) {
-      tbody.append(el('tr', {}, el('td', { colspan: isAdmin ? 7 : 5 }, emptyState('search', 'No matches'))));
+      tbody.append(el('tr', {}, el('td', { colspan: isAdmin ? 8 : 6 }, emptyState('search', 'No matches'))));
     }
   };
 
   search.oninput = () => {
     const q = search.value.trim().toLowerCase();
-    draw(q ? domains.filter((d) => d.name.includes(q)) : domains);
+    draw(
+      q
+        ? domains.filter(
+            (d) => d.name.includes(q) || (d.technology?.name || '').toLowerCase().includes(q),
+          )
+        : domains,
+    );
   };
   draw(domains);
 
@@ -130,6 +137,7 @@ export async function renderDomains({ user }) {
               el('th', {}, 'Domain'),
               isAdmin ? el('th', {}, 'Provider') : null,
               el('th', {}, 'Status'),
+              el('th', {}, 'Built with'),
               el('th', {}, 'Expires'),
               el('th', {}, 'Emails'),
               isAdmin ? el('th', {}, 'Users') : null,
