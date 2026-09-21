@@ -502,6 +502,12 @@ function emailPanel(data, isAdmin) {
       el(
         'td',
         { class: 'actions' },
+        el(
+          'button',
+          { class: 'btn sm primary', onclick: () => navigate(`mail/${d.id}~${m.id}`) },
+          'Open inbox',
+        ),
+        ' ',
         el('button', { class: 'btn sm', onclick: () => emailModal(d.id, m) }, 'Edit'),
         ' ',
         // Password and provider deletion only mean anything for a mailbox that
@@ -683,6 +689,10 @@ function settingsPanel(data) {
       placeholder: s.hasFtpPassword ? `Saved (${s.ftpPasswordHint}) — leave blank to keep it` : '',
     }),
     ftpRootPath: el('input', { type: 'text', value: s.ftpRootPath || '', placeholder: '/public_html' }),
+    imapHost: el('input', { type: 'text', value: s.imapHost || '', placeholder: 'imap.example.com' }),
+    imapPort: el('input', { type: 'number', value: s.imapPort ?? '', placeholder: '993' }),
+    smtpHost: el('input', { type: 'text', value: s.smtpHost || '', placeholder: 'smtp.example.com' }),
+    smtpPort: el('input', { type: 'number', value: s.smtpPort ?? '', placeholder: '465' }),
     serverIp: el('input', { type: 'text', value: s.serverIp || '' }),
     serverHostname: el('input', { type: 'text', value: s.serverHostname || '' }),
     serverLocation: el('input', { type: 'text', value: s.serverLocation || '' }),
@@ -753,6 +763,31 @@ function settingsPanel(data) {
           field('Hostname', inputs.serverHostname),
           field('Location', inputs.serverLocation),
           field('Nameservers', inputs.nameservers, 'Comma separated.'),
+        ),
+      ),
+    ),
+    el(
+      'div',
+      { class: 'card' },
+      el(
+        'div',
+        { class: 'card-head' },
+        el(
+          'div',
+          { class: 'grow' },
+          el('h2', {}, 'Mail servers'),
+          el('p', {}, 'Needed to open a mailbox from inside the portal.'),
+        ),
+      ),
+      el(
+        'div',
+        { class: 'card-body' },
+        el('div', { class: 'form-row' }, field('IMAP host (incoming)', inputs.imapHost), field('IMAP port', inputs.imapPort)),
+        el('div', { class: 'form-row' }, field('SMTP host (outgoing)', inputs.smtpHost), field('SMTP port', inputs.smtpPort)),
+        el(
+          'p',
+          { class: 'hint', style: 'margin:0' },
+          'Ports 993 (IMAP) and 465 (SMTP) are the usual encrypted ones. Your provider lists these under email or webmail settings.',
         ),
       ),
     ),

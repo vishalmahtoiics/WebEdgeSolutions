@@ -177,6 +177,10 @@ model EmailAccount {
   isFromProvider Boolean @default(false)
   externalId     String?
 
+  /// The mailbox's own password, encrypted at rest (AES-256-GCM). Used to sign
+  /// in to IMAP and SMTP on the owner's behalf; never sent to the browser.
+  encryptedPassword String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -203,6 +207,14 @@ model DomainSettings {
   /// Directory the file manager is confined to, e.g. /public_html. Everything
   /// browsed through the portal is resolved beneath this.
   ftpRootPath String?
+
+  // Mail servers, shared by every mailbox on the domain.
+  imapHost   String?
+  imapPort   Int?
+  imapSecure Boolean @default(true)
+  smtpHost   String?
+  smtpPort   Int?
+  smtpSecure Boolean @default(true)
 
   // Server information
   serverIp       String?

@@ -439,3 +439,28 @@ input:disabled, select:disabled { background: #f6f7fa; color: var(--text-muted);
   white-space: pre; overflow-wrap: normal; overflow-x: auto;
   background: #fbfcfe;
 }
+
+/* ---------------------------------------------------------------------------
+   Webmail
+--------------------------------------------------------------------------- */
+.mail-layout { display: grid; gap: 20px; grid-template-columns: 210px minmax(0, 1fr); align-items: start; }
+.mail-folders { display: flex; flex-direction: column; gap: 2px; }
+
+tr.unread td { background: #fbfcff; }
+tr.unread td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+
+.mail-body { width: 100%; min-height: 320px; border: 0; background: #fff; }
+.mail-text {
+  margin: 0; white-space: pre-wrap; word-break: break-word;
+  font-family: var(--font); font-size: 14px; line-height: 1.6;
+}
+.mail-compose {
+  width: 100%; min-height: 240px; resize: vertical;
+  font-family: var(--font); font-size: 14px; line-height: 1.6;
+}
+
+@media (max-width: 860px) {
+  .mail-layout { grid-template-columns: 1fr; }
+  .mail-folders { flex-direction: row; flex-wrap: wrap; }
+  .mail-folders .nav-item { width: auto; }
+}

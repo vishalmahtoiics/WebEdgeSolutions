@@ -292,6 +292,41 @@ could edit the host could aim the portal somewhere it has no business going.
 
 ---
 
+## Webmail
+
+A mailbox can be opened from inside the portal: **Open inbox** on any mailbox,
+on the domain's Emails tab or the Emails page.
+
+- read the inbox and other folders, paged newest-first
+- open a message, with attachments to download
+- reply, or compose a new message
+- delete (moved to Trash where the server has one)
+
+Two things are needed first, both under **FTP & Server**:
+
+| Setting | Usual value |
+| --- | --- |
+| IMAP host / port | `imap.yourprovider.com` / `993` |
+| SMTP host / port | `smtp.yourprovider.com` / `465` |
+
+Then **Mailbox password** on the inbox page — the mailbox's own password, the
+one used to sign in to webmail. It is encrypted before being stored, never sent
+back to the page, and checked against the mail server before it is accepted, so
+a typo is caught immediately rather than on the first attempt to read mail.
+
+Nothing is cached: every action opens a connection, does its work and closes it,
+so the portal never holds a stale copy of an inbox and never keeps a session
+open against a mail server.
+
+HTML messages are rendered in a sandboxed frame with no scripts and no access
+to the portal, since a message body is somebody else's markup. The From address
+is always the mailbox itself — the mail server would reject anything else.
+
+Assigned users get webmail for mailboxes on their own domains.
+
+
+---
+
 ## Roles and access
 
 **Super Admin** manages everything: providers, all domains, users, and resource
@@ -329,7 +364,7 @@ user can reach contains the provider's name.
 ## Security
 
 - Passwords hashed with bcrypt (cost 12).
-- Provider API tokens **and FTP passwords** encrypted at rest with AES-256-GCM
+- Provider API tokens, **FTP passwords and mailbox passwords** encrypted at rest with AES-256-GCM
   and **never** sent to the browser — the UI only ever sees the last four
   characters.
 - Every file-manager path is confined beneath the domain's configured root.

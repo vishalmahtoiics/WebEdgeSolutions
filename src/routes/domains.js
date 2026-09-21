@@ -9,6 +9,7 @@ import { encrypt, decryptMaybe, tokenHint } from '../lib/crypto.js';
 import { loadProviderWithToken } from '../services/providerService.js';
 import { syncDnsRecords, syncEmailAccounts, refreshDomain } from '../services/syncService.js';
 import { filesRouter } from './files.js';
+import { webmailRouter } from './webmail.js';
 import {
   presentDomainSummary,
   presentDomainDetail,
@@ -211,6 +212,13 @@ const settingsSchema = z.object({
   ftpPassword: z.string().max(255).optional(),
   ftpProtocol: z.enum(['FTP', 'FTPS', 'SFTP']).or(z.literal('')).optional(),
   ftpRootPath: z.string().trim().max(1024).optional(),
+  // Mail servers, shared by every mailbox on the domain.
+  imapHost: z.string().trim().max(255).optional(),
+  imapPort: z.coerce.number().int().min(1).max(65535).nullish(),
+  imapSecure: z.coerce.boolean().optional(),
+  smtpHost: z.string().trim().max(255).optional(),
+  smtpPort: z.coerce.number().int().min(1).max(65535).nullish(),
+  smtpSecure: z.coerce.boolean().optional(),
   serverIp: z.string().trim().max(64).optional(),
   serverHostname: z.string().trim().max(255).optional(),
   serverLocation: z.string().trim().max(120).optional(),
@@ -265,6 +273,9 @@ domainsRouter.put(
 // Mounted through withDomain, so every file route inherits the same check as
 // the rest of the domain: a user reaches only domains assigned to them.
 domainsRouter.use('/:id/files', withDomain(), filesRouter);
+
+// Webmail for one mailbox, behind the same domain check.
+domainsRouter.use('/:id/emails/:emailId/mail', withDomain(), webmailRouter);
 
 // ---------------------------------------------------------------------------
 // DNS records

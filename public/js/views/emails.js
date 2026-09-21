@@ -96,6 +96,12 @@ function domainCard(domain, isAdmin) {
       el(
         'td',
         { class: 'actions' },
+        el(
+          'button',
+          { class: 'btn sm primary', onclick: () => navigate(`mail/${domain.id}~${m.id}`) },
+          'Open inbox',
+        ),
+        ' ',
         el('button', { class: 'btn sm', onclick: () => emailModal(domain.id, m) }, 'Edit'),
         ' ',
         // A password only exists upstream, so only a live mailbox offers it.

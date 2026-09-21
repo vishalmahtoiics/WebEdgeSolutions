@@ -9,6 +9,7 @@ import { renderProviders } from './views/providers.js';
 import { renderResources } from './views/resources.js';
 import { renderEmails } from './views/emails.js';
 import { renderProfile } from './views/profile.js';
+import { renderWebmail } from './views/webmail.js';
 
 const root = document.getElementById('app');
 
@@ -42,6 +43,7 @@ const VIEWS = {
   resources: renderResources,
   emails: renderEmails,
   settings: renderProfile,
+  mail: renderWebmail,
 };
 
 // Routes a normal user must never reach, even by typing the hash directly.
@@ -144,7 +146,7 @@ async function signOut() {
 
 function markActiveNav(route) {
   // The domain manage page is a child of Domains, so keep that item lit.
-  const active = route === 'domain' ? 'domains' : route;
+  const active = route === 'domain' ? 'domains' : route === 'mail' ? 'emails' : route;
   document.querySelectorAll('.nav-item').forEach((item) => {
     item.classList.toggle('active', item.dataset.route === active);
   });
