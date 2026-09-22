@@ -107,8 +107,15 @@ export function presentDomainDetail(domain, isAdmin) {
   };
 }
 
-/// DNS record. `isFromProvider` drives whether a sync replaces the row, which
-/// is an implementation detail a user has no use for.
+/// DNS record.
+///
+/// `isLive` says whether this record is in the zone the internet resolves, as
+/// opposed to a note kept only in the portal. Everyone gets it, because it is
+/// the difference between editing real DNS and editing a memo — and as a plain
+/// boolean about their own zone it names nobody.
+///
+/// `isFromProvider` is the same bit wearing its internal meaning (it decides
+/// whether a sync replaces the row) and stays with the administrator.
 export function presentDnsRecord(record, isAdmin) {
   const base = {
     id: record.id,
@@ -116,6 +123,7 @@ export function presentDnsRecord(record, isAdmin) {
     type: record.type,
     content: record.content,
     ttl: record.ttl,
+    isLive: Boolean(record.isFromProvider),
   };
   return isAdmin ? { ...base, isFromProvider: record.isFromProvider } : base;
 }
@@ -162,10 +170,17 @@ export function presentEmailAccount(email, isAdmin) {
 /// Feature flags for the manage page. A user gets only what changes the UI;
 /// the adapter's own capability names stay server-side.
 export function presentCapabilities(capabilities, domain, isAdmin) {
-  if (isAdmin) return capabilities || {};
   const linked = Boolean(domain.providerId);
+  // Whether a DNS edit here changes what the internet resolves. Everyone needs
+  // this — it is the difference between editing a zone and editing a note —
+  // and as a plain boolean it says nothing about who holds the zone.
+  const canEditLiveDns = linked && Boolean(capabilities?.dnsWrite);
+
+  if (isAdmin) return { ...(capabilities || {}), canEditLiveDns };
+
   return {
     canRefresh: linked && Boolean(capabilities?.email || capabilities?.dns),
     canManageEmail: linked && Boolean(capabilities?.emailWrite),
+    canEditLiveDns,
   };
 }

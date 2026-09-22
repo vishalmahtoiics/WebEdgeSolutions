@@ -9,6 +9,12 @@ import { encrypt, decryptMaybe, tokenHint } from '../lib/crypto.js';
 import { loadProviderWithToken } from '../services/providerService.js';
 import { syncDnsRecords, syncEmailAccounts, refreshDomain } from '../services/syncService.js';
 import { detectAndStore } from '../services/technologyService.js';
+import {
+  createRecord as createDnsRecord,
+  updateRecord as updateDnsRecord,
+  deleteRecord as deleteDnsRecord,
+  canWriteZone,
+} from '../services/dnsService.js';
 import { filesRouter } from './files.js';
 import { webmailRouter } from './webmail.js';
 import {
@@ -88,6 +94,81 @@ domainsRouter.post(
       },
     });
     res.status(201).json({ domain });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Is a name free to register
+// ---------------------------------------------------------------------------
+
+const DEFAULT_TLDS = ['com', 'in', 'net', 'org', 'co'];
+
+const availabilitySchema = z.object({
+  // The name on its own ("mysite") or with an ending ("mysite.com"); an ending
+  // typed here is simply added to the list to check.
+  name: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .min(1, 'Enter a name to check.')
+    .max(63 + 40)
+    .regex(/^[a-z0-9][a-z0-9.-]*$/, 'Use letters, numbers and hyphens.'),
+  tlds: z.array(z.string().trim().toLowerCase().max(24)).max(10).optional(),
+});
+
+/// Checks a name against the registry through whichever connected provider can
+/// answer. Super Admin only: it spends a provider's API quota, and buying
+/// domains is not a user's business.
+domainsRouter.post(
+  '/availability',
+  requireAdmin,
+  validate(availabilitySchema),
+  asyncHandler(async (req, res) => {
+    const [label, ...rest] = req.body.name.split('.');
+    if (!label) throw badRequest('Enter a name to check.');
+
+    const typedTld = rest.join('.');
+    const tlds = [...new Set([...(typedTld ? [typedTld] : []), ...(req.body.tlds || DEFAULT_TLDS)])].slice(0, 10);
+
+    // Any connected provider that can answer will do; the first one that does
+    // wins, and the reply never says which it was.
+    const providers = await prisma.provider.findMany({
+      where: { isActive: true },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const reasons = [];
+    for (const provider of providers) {
+      const adapter = getAdapter(provider.adapter);
+      if (!adapter?.capabilities?.domainSearch || typeof adapter.checkDomainAvailability !== 'function') continue;
+
+      try {
+        const { token } = await loadProviderWithToken(provider.id);
+        const results = await adapter.checkDomainAvailability(token, { name: label, tlds });
+
+        // Already in the portal is worth knowing: "available" would be
+        // misleading for a domain the account already owns.
+        const known = await prisma.domain.findMany({
+          where: { name: { in: results.map((r) => r.domain) } },
+          select: { name: true },
+        });
+        const owned = new Set(known.map((d) => d.name));
+
+        return res.json({
+          ok: true,
+          name: label,
+          results: results.map((r) => ({ ...r, alreadyInPortal: owned.has(r.domain) })),
+        });
+      } catch (err) {
+        reasons.push(err.message || 'The provider could not answer.');
+      }
+    }
+
+    throw badRequest(
+      reasons.length
+        ? `No connected provider could check that name. ${reasons.join(' ')}`
+        : 'No connected provider can check domain availability. Add one under Providers / APIs.',
+    );
   }),
 );
 
@@ -364,15 +445,17 @@ const dnsSchema = z.object({
   ttl: z.coerce.number().int().min(60).max(604800).default(3600),
 });
 
+/// These three go to the real DNS zone when the domain has one that accepts
+/// changes, and to the portal alone when it does not. The service decides
+/// which, and the reply says which happened — editing an MX record for real is
+/// not the same act as editing a note about one.
 domainsRouter.post(
   '/:id/dns',
   withDomain(),
   validate(dnsSchema),
   asyncHandler(async (req, res) => {
-    const record = await prisma.dnsRecord.create({
-      data: { domainId: req.domain.id, ...req.body, isFromProvider: false },
-    });
-    res.status(201).json({ record });
+    const result = await createDnsRecord(req.domain, req.body);
+    res.status(201).json(result);
   }),
 );
 
@@ -385,14 +468,7 @@ domainsRouter.put(
       where: { id: req.params.recordId, domainId: req.domain.id },
     });
     if (!existing) throw notFound('DNS record not found.');
-
-    const record = await prisma.dnsRecord.update({
-      where: { id: existing.id },
-      // An edited record is no longer a faithful copy of the provider zone, so
-      // it becomes a manual record and survives the next sync.
-      data: { ...req.body, isFromProvider: false },
-    });
-    res.json({ record });
+    res.json(await updateDnsRecord(req.domain, existing, req.body));
   }),
 );
 
@@ -404,8 +480,7 @@ domainsRouter.delete(
       where: { id: req.params.recordId, domainId: req.domain.id },
     });
     if (!existing) throw notFound('DNS record not found.');
-    await prisma.dnsRecord.delete({ where: { id: existing.id } });
-    res.json({ ok: true });
+    res.json(await deleteDnsRecord(req.domain, existing));
   }),
 );
 

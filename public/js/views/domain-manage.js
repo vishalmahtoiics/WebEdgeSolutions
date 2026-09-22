@@ -414,6 +414,9 @@ function dnsPanel(data, isAdmin) {
   const d = data.domain;
   // Admins get an explicit zone reload; users use the page-level Refresh.
   const canSync = isAdmin && Boolean(d.provider) && data.capabilities?.dns;
+  // Whether a change here reaches the internet. Everything below says so
+  // plainly, because the two kinds of edit look identical and are not.
+  const canEditLive = Boolean(data.capabilities?.canEditLiveDns);
 
   const syncBtn = el('button', { class: 'btn' }, 'Load from provider');
   syncBtn.onclick = async () => {
@@ -436,17 +439,24 @@ function dnsPanel(data, isAdmin) {
       el('td', {}, el('span', { class: 'badge' }, r.type)),
       el('td', { class: 'mono break' }, r.content),
       el('td', { class: 'small muted' }, String(r.ttl)),
-      isAdmin
-        ? el(
-            'td',
-            {},
-            el('span', { class: `badge ${r.isFromProvider ? 'accent' : ''}` }, r.isFromProvider ? 'Provider' : 'Manual'),
-          )
-        : null,
+      el(
+        'td',
+        {},
+        el(
+          'span',
+          {
+            class: `badge ${r.isLive ? 'accent' : ''}`,
+            title: r.isLive
+              ? 'In the zone the internet resolves.'
+              : 'Kept in this portal only. It does not resolve anywhere.',
+          },
+          r.isLive ? 'Live' : 'Portal only',
+        ),
+      ),
       el(
         'td',
         { class: 'actions' },
-        el('button', { class: 'btn sm', onclick: () => dnsModal(d.id, r) }, 'Edit'),
+        el('button', { class: 'btn sm', onclick: () => dnsModal(d.id, r, canEditLive) }, 'Edit'),
         ' ',
         el(
           'button',
@@ -454,12 +464,18 @@ function dnsPanel(data, isAdmin) {
             class: 'btn sm danger',
             onclick: () =>
               confirmModal({
-                title: 'Delete DNS record',
-                message: `Delete the ${r.type} record for ${r.name}?`,
+                title: r.isLive ? 'Delete from the live DNS zone' : 'Delete DNS record',
+                message: r.isLive
+                  ? `This removes the ${r.type} record for ${r.name} from the zone the internet resolves.` +
+                    (['MX', 'NS'].includes(r.type)
+                      ? ' It is an ' +
+                        (r.type === 'MX' ? 'MX record, so email for this domain may stop arriving.' : 'NS record, so the domain may stop resolving entirely.')
+                      : ' The change takes effect as caches expire, up to the record\u2019s TTL.')
+                  : `Delete the ${r.type} record for ${r.name}? It is kept in this portal only, so nothing on the internet changes.`,
                 confirmLabel: 'Delete',
                 onConfirm: async () => {
-                  await api(`/domains/${d.id}/dns/${r.id}`, { method: 'DELETE' });
-                  toast('Record deleted.', 'ok');
+                  const res = await api(`/domains/${d.id}/dns/${r.id}`, { method: 'DELETE' });
+                  toast(res.message || 'Record deleted.', 'ok');
                   refresh();
                 },
               }),
@@ -483,15 +499,15 @@ function dnsPanel(data, isAdmin) {
         el(
           'p',
           {},
-          isAdmin
-            ? canSync
-              ? 'Records loaded from the provider are replaced each time you refresh. Records you add or edit here are kept.'
-              : 'This domain has no provider DNS integration — records are managed manually.'
-            : 'The DNS records for this domain. Use Refresh above to reload them.',
+          canEditLive
+            ? 'Changes here are written to the live zone and take effect as caches expire.'
+            : isAdmin
+              ? 'This zone cannot be written from here, so records are kept in the portal only.'
+              : 'The DNS records for this domain. Records marked Live are the ones the internet resolves.',
         ),
       ),
       canSync ? syncBtn : null,
-      el('button', { class: 'btn primary', onclick: () => dnsModal(d.id) }, '+ Add Record'),
+      el('button', { class: 'btn primary', onclick: () => dnsModal(d.id, null, canEditLive) }, '+ Add Record'),
     ),
     data.dnsRecords.length
       ? el(
@@ -510,7 +526,7 @@ function dnsPanel(data, isAdmin) {
                 el('th', {}, 'Type'),
                 el('th', {}, 'Value'),
                 el('th', {}, 'TTL'),
-                isAdmin ? el('th', {}, 'Source') : null,
+                el('th', {}, 'Where'),
                 el('th', {}, ''),
               ),
             ),
@@ -533,7 +549,36 @@ function dnsPanel(data, isAdmin) {
   );
 }
 
-function dnsModal(domainId, record = null) {
+/// The one thing the person needs to know before they press Save.
+function liveNotice(record, canEditLive) {
+  const live = record ? record.isLive : canEditLive;
+
+  if (live && canEditLive) {
+    return el(
+      'div',
+      { class: 'alert warn' },
+      record
+        ? 'This record is in the live DNS zone. Saving changes it for real, and the change takes effect as caches expire \u2014 up to the TTL below.'
+        : 'This will be added to the live DNS zone, and will start resolving as caches refresh.',
+    );
+  }
+
+  if (live && !canEditLive) {
+    return el(
+      'div',
+      { class: 'alert warn' },
+      'This record is in the live zone, but the zone cannot be written from here. Saving keeps your change in the portal only \u2014 the live record is left as it is.',
+    );
+  }
+
+  return el(
+    'div',
+    { class: 'alert info' },
+    'This record is kept in this portal only. It does not resolve anywhere, and a zone refresh will not overwrite it.',
+  );
+}
+
+function dnsModal(domainId, record = null, canEditLive = false) {
   const name = el('input', { type: 'text', value: record?.name || '@', placeholder: '@ or www' });
   const type = el(
     'select',
@@ -556,9 +601,11 @@ function dnsModal(domainId, record = null) {
       ttl: Number(ttl.value),
     };
     const path = record ? `/domains/${domainId}/dns/${record.id}` : `/domains/${domainId}/dns`;
-    await api(path, { method: record ? 'PUT' : 'POST', body });
-    toast(record ? 'Record updated.' : 'Record added.', 'ok');
+    const res = await api(path, { method: record ? 'PUT' : 'POST', body });
     close();
+    // The server says whether this reached the live zone or stopped at the
+    // portal; repeating its word beats the page assuming either.
+    toast(res.message || (record ? 'Record updated.' : 'Record added.'), 'ok');
     refresh();
   });
 
@@ -569,20 +616,10 @@ function dnsModal(domainId, record = null) {
         'div',
         {},
         alertHost,
-        record?.isFromProvider
-          ? el(
-              'div',
-              { class: 'alert warn' },
-              'This record came from the provider. Saving your changes marks it as a manual record — it will no longer be replaced when you refresh the zone, and the change is not pushed back to the provider.',
-            )
-          : null,
-        record && record.isFromProvider === undefined
-          ? el(
-              'div',
-              { class: 'alert info' },
-              'Your change is kept here and will not be overwritten by a refresh. It is not pushed to the name servers.',
-            )
-          : null,
+        // Three cases, and the difference between them matters enough to spell
+        // out every time: this writes real DNS, this edits a live record only
+        // in the portal, or this was never in the zone to begin with.
+        liveNotice(record, canEditLive),
         el('div', { class: 'form-row' }, field('Name', name), field('Type', type)),
         field('Value', content),
         field('TTL (seconds)', ttl),

@@ -6,12 +6,19 @@
 //   GET /api/domains/v1/portfolio/{domain}   -> registrar detail (nameservers, lock)
 //   GET /api/hosting/v1/websites             -> hosted websites (server/account info)
 //   GET /api/dns/v1/zones/{domain}           -> DNS zone records
+//   PUT /api/dns/v1/zones/{domain}           -> replace the zone (whole-zone write)
+//   POST /api/domains/v1/availability        -> is a name free to register
 //   GET /api/mail/v1/orders                  -> mail orders (one per domain)
 //   GET /api/mail/v1/orders/{orderId}/mailboxes -> mailboxes for an order
 //
 // Every method returns normalised data or throws; nothing is invented. When an
 // endpoint is not available on the account's plan the caller gets an explicit
 // "unsupported" result rather than fabricated rows.
+
+import {
+  flattenZone, addRecord, removeRecord, updateRecord,
+  assertSafeWrite, hasRecord, countRecords, ZoneError,
+} from '../lib/dnsZone.js';
 
 // Overridable so the integration tests can point the adapter at a local stub
 // that serves Hostinger's documented response shapes.
@@ -144,6 +151,10 @@ export const hostingerAdapter = {
   capabilities: {
     domains: true,
     dns: true,
+    // DNS is writable, but only as a whole zone — see replaceDnsZone.
+    dnsWrite: true,
+    // Whether a name is free to register.
+    domainSearch: true,
     email: true,
     // Mailboxes can be created, deleted and have their password changed
     // through the API; these act on the real account.
@@ -362,6 +373,112 @@ export const hostingerAdapter = {
         isConfirmed: c.isConfirmed ?? null,
       })),
     };
+  },
+
+
+  // -------------------------------------------------------------------------
+  // DNS writes.
+  //
+  // Hostinger has no per-record endpoint: a zone is replaced whole. So each of
+  // these reads the live zone, changes exactly one thing in it, checks the
+  // result against what was asked for, writes it back, and then reads it again
+  // to confirm. The read-back is not ceremony — a whole-zone write that half
+  // succeeded would otherwise look identical to one that worked.
+  // -------------------------------------------------------------------------
+
+  /// The zone exactly as Hostinger holds it, with nothing normalised away.
+  /// This is the shape that gets written back, so it must stay untouched.
+  async getDnsZoneRaw(token, domainName) {
+    try {
+      return unwrap(await request(token, `/api/dns/v1/zones/${encodeURIComponent(domainName)}`));
+    } catch (err) {
+      if (err.status === 404) return [];
+      throw err;
+    }
+  },
+
+  async replaceDnsZone(token, domainName, groups) {
+    await request(token, `/api/dns/v1/zones/${encodeURIComponent(domainName)}`, {
+      method: 'PUT',
+      body: { overwrite: true, zone: groups },
+    });
+    return { ok: true };
+  },
+
+  /// Applies one edit to the live zone and returns the zone as it stands
+  /// afterwards. `edit` is one of the pure functions from lib/dnsZone.
+  async applyZoneEdit(token, domainName, edit, { expectedDelta, verify, minimumBefore = 0 }) {
+    const before = await this.getDnsZoneRaw(token, domainName);
+    const { groups, ttlAffected = 0 } = edit(before);
+
+    assertSafeWrite(before, groups, { expectedDelta, minimumBefore });
+    await this.replaceDnsZone(token, domainName, groups);
+
+    // Read it back. If the zone does not now say what it was told to say, the
+    // write did not take, and silence here would be the worst outcome.
+    const after = await this.getDnsZoneRaw(token, domainName);
+    if (verify && !verify(after)) {
+      throw new ZoneError(
+        'The change was sent but the zone does not show it. Reload the DNS tab to see what the zone actually holds.',
+        502,
+      );
+    }
+
+    return { records: flattenZone(after), total: countRecords(after), ttlAffected };
+  },
+
+  async createDnsRecord(token, domainName, record, { minimumBefore = 0 } = {}) {
+    return this.applyZoneEdit(token, domainName, (zone) => addRecord(zone, record), {
+      expectedDelta: 1,
+      minimumBefore,
+      verify: (zone) => hasRecord(zone, record),
+    });
+  },
+
+  async updateDnsRecord(token, domainName, { before, after }, { minimumBefore = 0 } = {}) {
+    return this.applyZoneEdit(token, domainName, (zone) => updateRecord(zone, before, after), {
+      // One out, one in.
+      expectedDelta: 0,
+      minimumBefore,
+      verify: (zone) => hasRecord(zone, after) && !hasRecord(zone, before),
+    });
+  },
+
+  async deleteDnsRecord(token, domainName, record, { minimumBefore = 0 } = {}) {
+    return this.applyZoneEdit(token, domainName, (zone) => removeRecord(zone, record), {
+      expectedDelta: -1,
+      minimumBefore,
+      verify: (zone) => !hasRecord(zone, record),
+    });
+  },
+
+  /// Whether a name is free to register, across the given endings.
+  ///
+  /// Reports "unknown" rather than "available" when the registry does not
+  /// answer clearly: telling someone a taken domain is free is worse than
+  /// telling them we could not find out.
+  async checkDomainAvailability(token, { name, tlds }) {
+    const body = await request(token, '/api/domains/v1/availability', {
+      method: 'POST',
+      body: { domain: name, tlds, withAlternatives: false },
+    });
+
+    const rows = unwrap(body);
+    return rows
+      .map((row) => {
+        const tld = row?.tld || row?.domain?.split('.').slice(1).join('.') || null;
+        const full = row?.domain?.includes('.') ? row.domain : tld ? `${name}.${tld}` : row?.domain || name;
+        const free = row?.isAvailable ?? row?.available ?? null;
+        return {
+          domain: String(full).toLowerCase(),
+          tld,
+          available: free === null ? null : Boolean(free),
+          // Some endings refuse registration for reasons of their own
+          // (reserved, premium, restricted). Pass that through verbatim.
+          restriction: row?.restriction || row?.reason || null,
+        };
+      })
+      .filter((r) => r.domain);
   },
 
   /// VPS instances on the account, shown read-only in the Super Admin area.

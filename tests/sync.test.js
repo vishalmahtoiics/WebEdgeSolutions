@@ -18,6 +18,13 @@ const D1 = `sync-a-${stamp}.example`;
 const D2 = `sync-b-${stamp}.example`;
 const MANUAL = `manual-${stamp}.example`;
 
+// The zone is state, not a fixture: DNS writes go to the provider for real now,
+// so a PUT has to change what the next GET returns.
+let zone = [
+  { name: '@', type: 'A', ttl: 3600, records: [{ content: '203.0.113.20', isDisabled: false }] },
+  { name: 'www', type: 'CNAME', ttl: 3600, records: [{ content: D1, isDisabled: false }] },
+];
+
 // Mutable so a test can simulate the provider's data changing between syncs.
 let portfolio = [
   { id: 201, domain: D1, type: 'domain', status: 'active', createdAt: '2024-02-01T10:00:00Z', expiresAt: '2027-02-01T10:00:00Z' },
@@ -27,10 +34,7 @@ let portfolio = [
 const routes = () => ({
   '/api/domains/v1/portfolio': portfolio,
   '/api/hosting/v1/websites': [{ domain: D1, isEnabled: true, username: 'u55555', orderId: 90, createdAt: '2024-02-02T10:00:00Z' }],
-  [`/api/dns/v1/zones/${D1}`]: [
-    { name: '@', type: 'A', ttl: 3600, records: [{ content: '203.0.113.20', isDisabled: false }] },
-    { name: 'www', type: 'CNAME', ttl: 3600, records: [{ content: D1, isDisabled: false }] },
-  ],
+  [`/api/dns/v1/zones/${D1}`]: zone,
   '/api/mail/v1/orders': { data: [{ id: 'ord_9', status: 'active', seats: 2, domain: { domain: D1 } }] },
   // Usage is storageUsed/storageQuota in kilobytes, per Hostinger's
   // MailV1MailboxesMailboxUsageResource.
@@ -68,8 +72,20 @@ test.before(async () => {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ message: 'Invalid or expired API token.' }));
     }
-    const table = routes();
     const path = req.url.split('?')[0];
+
+    if (path === `/api/dns/v1/zones/${D1}` && req.method === 'PUT') {
+      const chunks = [];
+      req.on('data', (c) => chunks.push(c));
+      return req.on('end', () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString() || '{}');
+        if (Array.isArray(body.zone)) zone = body.zone;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      });
+    }
+
+    const table = routes();
     if (!(path in table)) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ message: 'Not found' }));
@@ -180,19 +196,36 @@ test('DNS records are imported from the provider zone', async () => {
   assert.ok(data.dnsRecords.every((r) => r.isFromProvider));
 });
 
-test('manual DNS records survive a zone refresh, provider ones are replaced', async () => {
-  await call(`/domains/${ctx.domainId}/dns`, {
+test('a record added to a provider domain goes into the live zone', async () => {
+  const res = await call(`/domains/${ctx.domainId}/dns`, {
     method: 'POST',
     body: { name: 'custom', type: 'TXT', content: 'keep-me', ttl: 300 },
+  });
+  assert.equal(res.status, 201);
+  assert.equal(res.data.live, true, 'this domain has a writable zone, so the record belongs in it');
+
+  // Proven against the stub's own state, not against the reply.
+  assert.ok(
+    zone.some((g) => g.type === 'TXT' && g.records.some((r) => r.content === 'keep-me')),
+    'the zone really holds it',
+  );
+});
+
+test('a hand-added record survives a zone refresh, live ones are replaced', async () => {
+  // Straight into the database: a note that was never part of the zone.
+  await prisma.dnsRecord.create({
+    data: { domainId: ctx.domainId, name: 'note', type: 'TXT', content: 'mine-only', ttl: 300, isFromProvider: false },
   });
 
   await call(`/domains/${ctx.domainId}/dns/sync`, { method: 'POST' });
 
   const { data } = await call(`/domains/${ctx.domainId}`);
-  // 2 provider records (refreshed, not duplicated) + 1 manual record.
-  assert.equal(data.dnsRecords.length, 3);
-  assert.equal(data.dnsRecords.filter((r) => r.isFromProvider).length, 2);
-  assert.ok(data.dnsRecords.some((r) => r.content === 'keep-me'));
+  const live = data.dnsRecords.filter((r) => r.isFromProvider);
+  // 3 in the zone (apex A, www CNAME, the TXT just written) refreshed rather
+  // than duplicated, plus the one note.
+  assert.equal(live.length, 3);
+  assert.equal(data.dnsRecords.length, 4);
+  assert.ok(data.dnsRecords.some((r) => r.content === 'mine-only' && !r.isFromProvider));
 });
 
 test('mailboxes are imported from the provider', async () => {

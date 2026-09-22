@@ -175,13 +175,17 @@ Each adapter declares what it can do, and the UI adapts. For Hostinger:
 | --- | --- | --- |
 | Domains | yes | `GET /api/domains/v1/portfolio`, `GET /api/hosting/v1/websites` |
 | Domain details | yes | `GET /api/domains/v1/portfolio/{domain}` |
-| DNS records | yes | `GET /api/dns/v1/zones/{domain}` |
+| DNS records (read) | yes | `GET /api/dns/v1/zones/{domain}` |
+| DNS records (add / edit / delete) | yes | `PUT /api/dns/v1/zones/{domain}` — **changes real DNS** |
+| Is a name free to register | yes | `POST /api/domains/v1/availability` |
 | Email accounts | yes | `GET /api/mail/v1/orders` → `GET /api/mail/v1/orders/{orderId}/mailboxes` |
 | Create / delete mailbox | yes | `POST` / `DELETE /api/mail/v1/mailboxes` — **changes the real account** |
 | Change mailbox password | yes | `PATCH /api/mail/v1/mailboxes/{id}/password` |
 | Forwarders, aliases, auto-replies, catch-all | read only | `GET /api/mail/v1/orders/{orderId}/…` |
 | Servers (VPS) | yes | `GET /api/vps/v1/virtual-machines` |
 | FTP / FTPS credentials | **no** | Not exposed by the API — configure manually per domain. |
+| What a site is built on | **no** | Not in the API — detected from the site's files or homepage. |
+| Nameservers, domain lock, WHOIS privacy | read only | `GET /api/domains/v1/portfolio/{domain}` |
 
 Reference: [Hostinger API documentation](https://docs.hostinger.com/api-reference/overview).
 
@@ -189,12 +193,78 @@ Reference: [Hostinger API documentation](https://docs.hostinger.com/api-referenc
 
 1. Create `src/providers/<name>.js` exporting an adapter with a `key`, `label`,
    `capabilities`, and a `testConnection(token)` method. Implement whichever of
-   `listDomains`, `getDomainDetails`, `listDnsRecords`, `listEmailAccounts` and
-   `listServers` that provider supports.
+   `listDomains`, `getDomainDetails`, `listDnsRecords`, `listEmailAccounts`,
+   `createDnsRecord`, `updateDnsRecord`, `deleteDnsRecord`,
+   `checkDomainAvailability` and `listServers` that provider supports.
 2. Register it in `src/providers/index.js`.
 
 Unimplemented methods degrade gracefully — the relevant panel falls back to
 manual entry instead of erroring.
+
+---
+
+## DNS
+
+The DNS tab lists a domain's records, and every row says **where** it lives:
+
+| | |
+| --- | --- |
+| **Live** | In the zone the internet resolves. Editing it changes real DNS. |
+| **Portal only** | Kept here as a note. It resolves nowhere, and a zone reload will not overwrite it. |
+
+Adding, editing and deleting a Live record goes to the provider for real. The
+reply always says which happened, so a toast reading "Added A blog to the live
+DNS zone" is a different event from "Record saved", and you can tell them apart
+without guessing.
+
+### Why a DNS edit is careful here
+
+Hostinger has no per-record endpoint. A zone is replaced whole
+(`PUT /api/dns/v1/zones/{domain}`), so "add one record" is really read the zone,
+change one thing, write it all back. That is the one operation in this portal
+that can destroy data it was never asked to touch, so four things guard it:
+
+1. **Nothing is normalised on the way through.** The upstream objects are
+   deep-cloned and only the group being edited is rebuilt. MX priorities, and
+   any field Hostinger sends that this portal has never heard of, survive the
+   round trip. There is a test that asserts exactly this.
+2. **The record count must match the edit.** An add must produce exactly one
+   more record than was read, a delete exactly one fewer, an edit the same
+   number. Anything else is refused with the zone untouched — which catches a
+   zone-wipe as a special case, while still allowing you to deliberately delete
+   the last record in a zone.
+3. **An empty read is treated as a failed read, not an empty zone.** A missing
+   zone legitimately reads as empty. But if a live zone 404s transiently,
+   "read empty, add one record, write" would replace real DNS with a single
+   record. So each write says how many records the portal already believes are
+   up there, and a read that contradicts that is refused.
+4. **The zone is read back after every write.** A provider that accepts a write
+   and changes nothing is otherwise indistinguishable from one that worked. If
+   the zone does not show the change, you are told so rather than shown a
+   success message.
+
+MX and NS deletions say what they will break — email stopping, or the domain
+ceasing to resolve — before you confirm.
+
+> TTL belongs to the (name, type) group upstream, not to the individual value.
+> Giving a new TTL to a name that already has records moves them all, so the
+> reply says how many it moved.
+
+---
+
+## Is a name free to register
+
+**Domains → Check availability** (Super Admin only) checks a name across
+endings through whichever connected provider can answer.
+
+The registry's answer is passed through as it comes, including **Not sure**
+when it does not answer clearly — telling someone a taken name is free is a
+worse failure than admitting the registry was silent. A name already in the
+portal is labelled as such rather than as available, and a restriction the
+registry reports (premium, reserved) is shown verbatim.
+
+Checking reserves nothing. **Add to portal** only saves retyping the name — you
+still register it with a registrar yourself.
 
 ---
 
@@ -504,7 +574,7 @@ scripts/
 src/
   server.js            Express app and middleware
   config.js            Environment configuration
-  lib/                 Encryption, storage, mail, technology detection, helpers
+  lib/                 Encryption, storage, mail, DNS zones, tech detection, helpers
   middleware/          Authentication, authorization, validation
   providers/           Pluggable provider adapters (hostinger.js)
   routes/              API endpoints

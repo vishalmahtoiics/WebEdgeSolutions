@@ -1,9 +1,14 @@
-// End-to-end checks against a running server (npm start) and a live database.
-// Run with:  npm test
+// End-to-end checks over the whole API, against a live database.
+//
+// The server is started by this file so `npm test` needs nothing running
+// beforehand. Set TEST_BASE_URL to point these at a server you are already
+// running instead — useful against a deployment.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 
-const BASE = process.env.TEST_BASE_URL || 'http://localhost:3000';
+const OWN_PORT = 3985;
+const BASE = process.env.TEST_BASE_URL || `http://127.0.0.1:${OWN_PORT}`;
 const ADMIN = { email: 'admin@example.com', password: 'Admin@12345' };
 
 /// Minimal cookie-aware client so each actor keeps its own session.
@@ -41,6 +46,30 @@ const admin = client();
 const member = client();
 
 const ctx = {};
+let server;
+
+test.before(async () => {
+  // Nothing to start when these are aimed at a server somewhere else.
+  if (process.env.TEST_BASE_URL) return;
+
+  server = spawn(process.execPath, ['src/server.js'], {
+    env: { ...process.env, PORT: String(OWN_PORT) },
+    stdio: 'ignore',
+  });
+
+  for (let i = 0; i < 80; i += 1) {
+    try {
+      if ((await fetch(`${BASE}/api/health`)).ok) return;
+    } catch {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+  throw new Error(`The server did not come up on port ${OWN_PORT}.`);
+});
+
+test.after(() => {
+  server?.kill();
+});
 
 test('health endpoint responds', async () => {
   const res = await fetch(`${BASE}/api/health`);
