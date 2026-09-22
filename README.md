@@ -184,6 +184,7 @@ Each adapter declares what it can do, and the UI adapts. For Hostinger:
 | Forwarders, aliases, auto-replies, catch-all | read only | `GET /api/mail/v1/orders/{orderId}/…` |
 | Servers (VPS) | yes | `GET /api/vps/v1/virtual-machines` |
 | FTP / FTPS credentials | **no** | Not exposed by the API — configure manually per domain. |
+| Database credentials | **no** | Not exposed by the API — configure manually per domain. |
 | What a site is built on | **no** | Not in the API — detected from the site's files or homepage. |
 | Nameservers, domain lock, WHOIS privacy | read only | `GET /api/domains/v1/portfolio/{domain}` |
 
@@ -410,6 +411,92 @@ could edit the host could aim the portal somewhere it has no business going.
 
 ---
 
+## Database (SQL)
+
+Each domain can have a **Database** tab: tables, rows, structure, exports, a row
+editor and a SQL query editor, over MySQL or MariaDB.
+
+**The provider API does not hand out database credentials**, so these are
+entered by hand under **FTP & Server** — host, port, database, user, password —
+exactly as FTP is. The password is encrypted at rest (AES-256-GCM) and never
+sent to the browser; the page only ever learns that one is stored.
+
+> **Remote MySQL is the prerequisite, and the usual reason this fails.** Shared
+> hosting blocks database connections from outside by default. Add the portal
+> server's IP under *Remote MySQL* in your hosting control panel, or nothing
+> here will connect. The error message says this rather than reporting a bare
+> timeout, because that is the answer nine times out of ten.
+
+| | |
+| --- | --- |
+| Tables | Name, engine, size, and the engine's row estimate (marked as an estimate) |
+| Browse | Paged rows, search across every column, sort by any column |
+| Structure | Columns, types, keys, indexes, and an exact row count |
+| Query | One statement at a time, results capped at 500 rows |
+| Rows | Edit or delete a single row, by primary key |
+| Export | The whole table as CSV or as INSERT statements, streamed |
+
+### Writes are off until you turn them on
+
+`Allow statements that change data` is a per-domain switch, off by default. With
+it off the query editor runs only SELECT and SHOW. With it on, anyone who can
+reach that domain — including an assigned user — can INSERT, UPDATE, DELETE and
+DROP for real, with no undo. Only a Super Admin can move the switch: a user who
+could grant themselves writes would not be limited by it.
+
+### How a statement is read before it runs
+
+A query editor is the most dangerous thing in this portal, because two
+statements can look almost identical and cost wildly different amounts.
+`DELETE FROM orders WHERE id = 5` and `DELETE FROM orders` differ by six
+characters and by a whole table. So the editor asks the server what a statement
+means as you type, and shows the verdict — *Reads data*, *Changes data*,
+*Destroys data*, *Not allowed* — on the button itself.
+
+Getting that verdict right is not a matter of pattern-matching the raw text.
+Comments and string literals are removed first, and only what remains is read
+as keywords, which is what makes these come out correctly:
+
+| Statement | Read as | Why a naive check gets it wrong |
+| --- | --- | --- |
+| `SELECT 'drop table users'` | Reads data | The keyword is inside a string |
+| ``SELECT * FROM `drop` `` | Reads data | The keyword is a table's name |
+| `SELECT 1; -- x`⏎`DROP TABLE users` | Refused | Two statements, the second hidden behind a comment |
+| `/*!40101 DROP TABLE users */` | Destroys data | MySQL executes this; it only looks like a comment |
+| `WITH t AS (SELECT 1) DELETE FROM posts …` | Changes data | The first `SELECT` belongs to the CTE, not the statement |
+| `UPDATE a SET x = (SELECT y WHERE z)` | Destroys data | The `WHERE` is the subquery's, so every row changes |
+
+Three more rules hold throughout:
+
+- **One statement at a time**, enforced in the classifier and again at the
+  protocol (`multipleStatements: false`), so a query box cannot become several.
+- **A destructive or structural statement needs its table typed out** before it
+  will run. A wrong name does not count.
+- **Statements that reach past the data are refused outright**, whatever the
+  write setting: `INTO OUTFILE`, `LOAD DATA`, `LOAD_FILE()`, `GRANT`,
+  `CREATE USER`, `SET GLOBAL`, `USE`, `DROP DATABASE`. None is part of managing
+  a website's tables, and they are the primitives that turn database access
+  into server access.
+
+### The statement log
+
+Every statement that changed something is recorded with who ran it, when, and
+what it targeted — written *before* it runs, so one that takes the connection
+down with it still leaves a trace. Reads are not logged; they are the ordinary
+case and would bury the entries that matter. Super Admin only, since it is a
+record of everyone's actions.
+
+### Bounds
+
+A statement is stopped by the server after 15 seconds. Results are capped at
+500 rows, streamed so a `SELECT *` over a large table cannot be pulled into
+memory whole; a truncated result says it was truncated. Identifiers are never
+interpolated from a request — a table or column name is checked against what
+the server itself reports before it reaches a statement — and values are always
+bound as parameters.
+
+---
+
 ## Webmail
 
 A mailbox can be opened from inside the portal: **Open inbox** on any mailbox,
@@ -546,19 +633,41 @@ user can reach contains the provider's name.
 
 ## Testing
 
-With the app running (`npm run dev`) in another terminal:
-
 ```bash
 npm test
 ```
 
-Covers authentication, authorization boundaries, provider configuration,
-credential handling, domain/DNS/email management, and the full sync flow
-including the no-duplicates guarantee.
+Nothing needs to be running first — each suite starts its own server on its own
+port. Set `TEST_BASE_URL` to aim the end-to-end suite at a server you are
+already running instead, which is useful against a deployment.
 
-The adapter and sync suites run against a local stub that serves Hostinger's
-documented response shapes, so they verify the integration without needing live
-credentials.
+Covers authentication, authorization boundaries, provider configuration,
+credential handling, domains, DNS, email, files, webmail, technology detection
+and the database tools, plus the full sync flow including the no-duplicates
+guarantee.
+
+**What runs against something real, and what runs against a stub:**
+
+| Suite | Runs against |
+| --- | --- |
+| Files | A real FTP server (`ftp-srv`), including path-traversal attempts |
+| Webmail and the mail app | A real IMAP server (`hoodiecrow-imap`) and a real SMTP server (`smtp-server`) |
+| Technology detection | A real FTP server holding real WordPress, Laravel, Next.js, static and PHP trees, plus a real HTTP server serving the markup those platforms send |
+| Database | A real MySQL or MariaDB server |
+| Hostinger adapter, sync, DNS writes | A local stub serving Hostinger's documented response shapes |
+
+The provider suites use a stub because Hostinger's API cannot be reached from a
+test run without live credentials. Everything else talks to a real server of
+the kind it will face in production.
+
+The database suite needs a MySQL or MariaDB server on the usual socket. Without
+one those tests **skip** rather than fail, so `npm test` still passes on a
+machine that has no database engine beyond the portal's own Postgres. Point it
+elsewhere with `TEST_MYSQL_SOCKET`. On Debian or Ubuntu:
+
+```bash
+apt-get install -y mariadb-server && service mariadb start
+```
 
 ---
 
@@ -574,7 +683,7 @@ scripts/
 src/
   server.js            Express app and middleware
   config.js            Environment configuration
-  lib/                 Encryption, storage, mail, DNS zones, tech detection, helpers
+  lib/                 Encryption, storage, mail, SQL, DNS zones, detection, helpers
   middleware/          Authentication, authorization, validation
   providers/           Pluggable provider adapters (hostinger.js)
   routes/              API endpoints

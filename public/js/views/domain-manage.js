@@ -5,6 +5,7 @@ import {
 } from '../core.js';
 import { navigate, refresh } from '../app.js';
 import { filesPanel } from './files.js';
+import { databasePanel, queryLogCard } from './database.js';
 import {
   createMailboxModal,
   passwordModal,
@@ -80,6 +81,9 @@ export async function renderDomainManage({ param, user }) {
     { key: 'dns', label: `DNS Records (${data.dnsRecords.length})` },
     { key: 'emails', label: `Emails (${data.emailAccounts.length})` },
     { key: 'files', label: 'Files' },
+    // Only offered where a database is actually configured: an empty tab that
+    // exists to tell you it is empty is just noise.
+    ...(data.settings?.dbHost && data.settings?.dbName ? [{ key: 'database', label: 'Database' }] : []),
     { key: 'settings', label: 'FTP & Server' },
   ];
   if (isAdmin) tabs.push({ key: 'access', label: 'Access' });
@@ -131,6 +135,12 @@ function renderPanel(key, data, isAdmin) {
   if (key === 'dns') return dnsPanel(data, isAdmin);
   if (key === 'emails') return emailPanel(data, isAdmin);
   if (key === 'files') return filesPanel(data.domain);
+  if (key === 'database') {
+    const panel = el('div', {}, databasePanel(data.domain, data.settings));
+    // The log records everyone's statements, so it belongs to the admin view.
+    if (isAdmin) panel.append(queryLogCard(data.domain));
+    return panel;
+  }
   if (key === 'settings') return settingsPanel(data);
   if (key === 'access') return accessPanel(data);
   return overviewPanel(data, isAdmin);
@@ -874,6 +884,16 @@ function settingsPanel(data) {
     imapPort: el('input', { type: 'number', value: s.imapPort ?? '', placeholder: '993' }),
     smtpHost: el('input', { type: 'text', value: s.smtpHost || '', placeholder: 'smtp.example.com' }),
     smtpPort: el('input', { type: 'number', value: s.smtpPort ?? '', placeholder: '465' }),
+    dbHost: el('input', { type: 'text', value: s.dbHost || '', placeholder: 'mysql.example.com' }),
+    dbPort: el('input', { type: 'number', value: s.dbPort ?? '', placeholder: '3306' }),
+    dbName: el('input', { type: 'text', value: s.dbName || '' }),
+    dbUser: el('input', { type: 'text', value: s.dbUser || '' }),
+    // Never pre-filled, same as the FTP one: the server does not send it back.
+    dbPassword: el('input', {
+      type: 'password',
+      autocomplete: 'off',
+      placeholder: s.hasDbPassword ? `Saved (${s.dbPasswordHint}) — leave blank to keep it` : '',
+    }),
     serverIp: el('input', { type: 'text', value: s.serverIp || '' }),
     serverHostname: el('input', { type: 'text', value: s.serverHostname || '' }),
     serverLocation: el('input', { type: 'text', value: s.serverLocation || '' }),
@@ -881,6 +901,8 @@ function settingsPanel(data) {
     phpVersion: el('input', { type: 'text', value: s.phpVersion || '' }),
     notes: el('textarea', {}, s.notes || ''),
   };
+
+  const dbAllowWrites = el('input', { type: 'checkbox', checked: Boolean(s.dbAllowWrites) });
 
   const alertHost = el('div');
   const save = el('button', { class: 'btn primary' }, 'Save settings');
@@ -891,6 +913,7 @@ function settingsPanel(data) {
         input.type === 'number' ? (input.value === '' ? null : Number(input.value)) : input.value.trim(),
       ]),
     );
+    body.dbAllowWrites = dbAllowWrites.checked;
     await api(`/domains/${d.id}/settings`, { method: 'PUT', body });
     toast('Settings saved.', 'ok');
     alertHost.append(el('div', { class: 'alert ok' }, 'Saved.'));
@@ -944,6 +967,46 @@ function settingsPanel(data) {
           field('Hostname', inputs.serverHostname),
           field('Location', inputs.serverLocation),
           field('Nameservers', inputs.nameservers, 'Comma separated.'),
+        ),
+      ),
+    ),
+    el(
+      'div',
+      { class: 'card' },
+      el(
+        'div',
+        { class: 'card-head' },
+        el(
+          'div',
+          { class: 'grow' },
+          el('h2', {}, 'Database'),
+          el('p', {}, 'MySQL or MariaDB. Not available from any provider API, so entered here.'),
+        ),
+      ),
+      el(
+        'div',
+        { class: 'card-body' },
+        el('div', { class: 'form-row' }, field('Host', inputs.dbHost), field('Port', inputs.dbPort)),
+        el('div', { class: 'form-row' }, field('Database name', inputs.dbName), field('Username', inputs.dbUser)),
+        field('Password', inputs.dbPassword, s.hasDbPassword ? 'A password is already saved. Type a new one only to replace it.' : null),
+        el(
+          'label',
+          { class: 'check', style: 'margin:4px 0 10px' },
+          dbAllowWrites,
+          el('span', {}, 'Allow statements that change data'),
+        ),
+        el(
+          'p',
+          { class: 'hint', style: 'margin:0 0 12px' },
+          'Left off, the Database tab will only run SELECT and SHOW. Switched on, anyone who can reach this ' +
+            'domain can INSERT, UPDATE, DELETE and DROP — for real, with no undo. Everything that changes data ' +
+            'is recorded in the statement log with who ran it.',
+        ),
+        el(
+          'div',
+          { class: 'alert info', style: 'margin:0' },
+          'Shared hosting blocks database connections from outside by default. Add this server\u2019s IP under ' +
+            'Remote MySQL in your hosting control panel, or nothing here will connect.',
         ),
       ),
     ),

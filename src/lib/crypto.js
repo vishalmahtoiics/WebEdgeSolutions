@@ -37,11 +37,21 @@ export function decrypt(payload) {
   ]).toString('utf8');
 }
 
-/// Last four characters of a token, so the UI can show which key is configured
-/// without ever handing the real value to the browser.
+/// Enough of a secret to recognise which one is configured, never enough to
+/// use it.
+///
+/// Four trailing characters is the usual shape of this, and it is fine for an
+/// API token, which is long. It is not fine for a password: this same helper
+/// now covers FTP, mailbox and database passwords, and for a short one the
+/// last four characters are most or all of the secret. So a tail is only shown
+/// when there is substantially more of the secret left hidden than revealed.
+///
+/// For anything shorter the caller still has its `has…Password` flag, which
+/// answers "is one stored" without disclosing any of it.
 export function tokenHint(token) {
-  const tail = String(token).slice(-4);
-  return `••••${tail}`;
+  const text = String(token ?? '');
+  if (text.length <= 8) return '••••••••';
+  return `••••${text.slice(-4)}`;
 }
 
 /// Decrypts a value that may predate encryption.

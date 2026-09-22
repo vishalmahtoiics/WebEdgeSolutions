@@ -38,6 +38,7 @@ model User {
 
   domains        UserDomain[]
   serverResource ServerResource?
+  queryLog       DatabaseQueryLog[]
 
   @@map("users")
 }
@@ -142,9 +143,10 @@ model Domain {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  provider      Provider?       @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  provider      Provider?          @relation(fields: [providerId], references: [id], onDelete: SetNull)
   dnsRecords    DnsRecord[]
   emailAccounts EmailAccount[]
+  queryLog      DatabaseQueryLog[]
   settings      DomainSettings?
   assignments   UserDomain[]
 
@@ -236,6 +238,20 @@ model DomainSettings {
   smtpPort   Int?
   smtpSecure Boolean @default(true)
 
+  /// MySQL / MariaDB access. The provider API does not hand these out, so they
+  /// are entered by hand, the same way FTP is. The password is encrypted at
+  /// rest and never sent to the browser.
+  dbHost     String?
+  dbPort     Int?
+  dbName     String?
+  dbUser     String?
+  dbPassword String?
+
+  /// Whether statements that change data may run. Off means the query editor
+  /// will only SELECT, which is the safe default for a database somebody's
+  /// website depends on.
+  dbAllowWrites Boolean @default(false)
+
   // Server information
   serverIp       String?
   serverHostname String?
@@ -287,4 +303,33 @@ model UserSession {
 
   @@index([expire], map: "IDX_session_expire")
   @@map("user_sessions")
+}
+
+/// A record of every statement that changed something, and who ran it.
+///
+/// A query box shared between people needs an audit trail: when a table looks
+/// wrong a week later, this is the only thing that can say what went through
+/// it. Reads are not logged — they are the ordinary case and would bury the
+/// entries that matter.
+model DatabaseQueryLog {
+  id       String  @id @default(cuid())
+  domainId String
+  /// Null once the account that ran it has been deleted; the record of the
+  /// statement outlives the person, which is rather the point.
+  userId   String?
+
+  /// Truncated to a sane length. This is a record, not a replay log.
+  sql    String
+  /// write | destructive | schema
+  kind   String
+  verb   String
+  target String?
+
+  createdAt DateTime @default(now())
+
+  domain Domain @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  user   User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([domainId, createdAt])
+  @@map("database_query_log")
 }

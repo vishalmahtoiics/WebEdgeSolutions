@@ -17,6 +17,7 @@ import {
 } from '../services/dnsService.js';
 import { filesRouter } from './files.js';
 import { webmailRouter } from './webmail.js';
+import { databaseRouter } from './database.js';
 import {
   presentDomainSummary,
   presentDomainDetail,
@@ -376,6 +377,13 @@ const settingsSchema = z.object({
   smtpHost: z.string().trim().max(255).optional(),
   smtpPort: z.coerce.number().int().min(1).max(65535).nullish(),
   smtpSecure: z.coerce.boolean().optional(),
+  // Database, entered by hand: the provider API does not hand these out.
+  dbHost: z.string().trim().max(255).optional(),
+  dbPort: z.coerce.number().int().min(1).max(65535).nullish(),
+  dbName: z.string().trim().max(128).optional(),
+  dbUser: z.string().trim().max(128).optional(),
+  dbPassword: z.string().max(255).optional(),
+  dbAllowWrites: z.coerce.boolean().optional(),
   serverIp: z.string().trim().max(64).optional(),
   serverHostname: z.string().trim().max(255).optional(),
   serverLocation: z.string().trim().max(120).optional(),
@@ -388,11 +396,16 @@ const settingsSchema = z.object({
 /// someone else's server, so only a hint of it ever leaves this process.
 function presentSettings(settings) {
   if (!settings) return settings;
-  const { ftpPassword, ...rest } = settings;
+  // Neither password leaves this process. What goes out is whether one is
+  // stored and a few characters of it, which is enough to recognise without
+  // being enough to use.
+  const { ftpPassword, dbPassword, ...rest } = settings;
   return {
     ...rest,
     hasFtpPassword: Boolean(ftpPassword),
     ftpPasswordHint: ftpPassword ? tokenHint(decryptMaybe(ftpPassword)) : null,
+    hasDbPassword: Boolean(dbPassword),
+    dbPasswordHint: dbPassword ? tokenHint(decryptMaybe(dbPassword)) : null,
   };
 }
 
@@ -408,11 +421,14 @@ domainsRouter.put(
 
     // An empty password field means "leave it alone", so an administrator can
     // edit the host or username without retyping the secret.
-    if (data.ftpPassword) {
-      data.ftpPassword = encrypt(data.ftpPassword);
-    } else {
-      delete data.ftpPassword;
+    for (const field of ['ftpPassword', 'dbPassword']) {
+      if (data[field]) data[field] = encrypt(data[field]);
+      else delete data[field];
     }
+
+    // Letting a user turn writes on for their own database would defeat the
+    // switch, so only an administrator may move it.
+    if (!isAdmin(req.user)) delete data.dbAllowWrites;
 
     const settings = await prisma.domainSettings.upsert({
       where: { domainId: req.domain.id },
@@ -430,6 +446,10 @@ domainsRouter.put(
 // Mounted through withDomain, so every file route inherits the same check as
 // the rest of the domain: a user reaches only domains assigned to them.
 domainsRouter.use('/:id/files', withDomain(), filesRouter);
+
+// Same guard for the database: a user reaches only their own domain's, and the
+// credentials are read server-side on every call.
+domainsRouter.use('/:id/db', withDomain(), databaseRouter);
 
 // Webmail for one mailbox, behind the same domain check.
 domainsRouter.use('/:id/emails/:emailId/mail', withDomain(), webmailRouter);
