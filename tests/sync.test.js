@@ -31,6 +31,40 @@ let portfolio = [
   { id: 202, domain: D2, type: 'domain', status: 'active', createdAt: '2024-03-01T10:00:00Z', expiresAt: '2027-03-01T10:00:00Z' },
 ];
 
+// Mutable so a test can give this domain more mailboxes than fit on one page.
+let mailboxes = [
+  { id: 'mb_a', address: `info@${D1}`, status: 'active', usage: { storageQuota: 5242880, storageUsed: 0 } },
+  { id: 'mb_b', address: `admin@${D1}`, status: 'active', usage: { storageQuota: 5242880, storageUsed: 0 } },
+];
+
+// Hostinger paginates its list endpoints and serves 15 rows a page, so the
+// stub does too. Reading only the first page is the whole bug this guards
+// against; a stub that hands over everything at once could never catch it.
+const PER_PAGE = 15;
+
+function paginate(rows, page) {
+  const last = Math.max(1, Math.ceil(rows.length / PER_PAGE));
+  const current = Math.min(Math.max(1, Number(page) || 1), last);
+  const from = (current - 1) * PER_PAGE;
+  return {
+    data: rows.slice(from, from + PER_PAGE),
+    links: {
+      first: '?page=1',
+      last: `?page=${last}`,
+      prev: current > 1 ? `?page=${current - 1}` : null,
+      next: current < last ? `?page=${current + 1}` : null,
+    },
+    meta: {
+      current_page: current,
+      from: rows.length ? from + 1 : null,
+      last_page: last,
+      per_page: PER_PAGE,
+      to: Math.min(from + PER_PAGE, rows.length),
+      total: rows.length,
+    },
+  };
+}
+
 const routes = () => ({
   '/api/domains/v1/portfolio': portfolio,
   '/api/hosting/v1/websites': [{ domain: D1, isEnabled: true, username: 'u55555', orderId: 90, createdAt: '2024-02-02T10:00:00Z' }],
@@ -38,12 +72,7 @@ const routes = () => ({
   '/api/mail/v1/orders': { data: [{ id: 'ord_9', status: 'active', seats: 2, domain: { domain: D1 } }] },
   // Usage is storageUsed/storageQuota in kilobytes, per Hostinger's
   // MailV1MailboxesMailboxUsageResource.
-  '/api/mail/v1/orders/ord_9/mailboxes': {
-    data: [
-      { id: 'mb_a', address: `info@${D1}`, status: 'active', usage: { storageQuota: 5242880, storageUsed: 0 } },
-      { id: 'mb_b', address: `admin@${D1}`, status: 'active', usage: { storageQuota: 5242880, storageUsed: 0 } },
-    ],
-  },
+  '/api/mail/v1/orders/ord_9/mailboxes': { data: mailboxes },
 });
 
 let stub;
@@ -106,8 +135,15 @@ test.before(async () => {
       res.writeHead(404, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ message: 'Not found' }));
     }
+
+    // Endpoints documented as a `{ data: [...] }` envelope are paginated;
+    // the ones documented as a bare array are not.
+    const fixture = table[path];
+    const page = new URL(req.url, 'http://stub').searchParams.get('page');
+    const body = Array.isArray(fixture) ? fixture : paginate(fixture.data, page);
+
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(table[path]));
+    res.end(JSON.stringify(body));
   });
   ignoreResets(stub);
   await new Promise((r) => stub.listen(0, '127.0.0.1', r));
@@ -274,6 +310,47 @@ test('a manually added mailbox is kept over the provider copy', async () => {
   const manual = data.emailAccounts.find((m) => m.address === `manual@${D1}`);
   assert.equal(manual.isFromProvider, false);
   assert.equal(manual.notes, 'hand entered');
+});
+
+test('every mailbox is imported, not just the first page of them', async () => {
+  // Reported from a live account: a domain with 50-odd mailboxes showed 15.
+  // The provider serves 15 rows a page, and only the first page was ever
+  // read — so the other 37 never arrived, and worse, sync deletes provider
+  // rows it did not see, which meant each run threw them away again.
+  const many = [
+    ...mailboxes,
+    ...Array.from({ length: 50 }, (_, i) => ({
+      id: `mb_bulk_${i}`,
+      address: `staff${String(i).padStart(2, '0')}@${D1}`,
+      status: 'active',
+      usage: { storageQuota: 5242880, storageUsed: 0 },
+    })),
+  ];
+  const original = mailboxes;
+  mailboxes = many;
+
+  try {
+    const res = await call(`/domains/${ctx.domainId}/emails/sync`, { method: 'POST' });
+    assert.equal(res.status, 200);
+    assert.equal(res.data.count, 52, 'all 52 mailboxes should come back, over four pages');
+
+    const { data } = await call(`/domains/${ctx.domainId}`);
+    const fromProvider = data.emailAccounts.filter((m) => m.isFromProvider);
+    assert.equal(fromProvider.length, 52);
+
+    // One from the last page in particular: an off-by-one in the paging would
+    // still pass a count check if it fetched the same page twice.
+    assert.ok(
+      data.emailAccounts.some((m) => m.address === `staff49@${D1}`),
+      'the mailbox on the final page must be there too',
+    );
+    // And the mailbox entered by hand in the previous test is still untouched.
+    assert.ok(data.emailAccounts.some((m) => m.address === `manual@${D1}` && !m.isFromProvider));
+  } finally {
+    // Put the provider back where the following tests expect it.
+    mailboxes = original;
+    await call(`/domains/${ctx.domainId}/emails/sync`, { method: 'POST' });
+  }
 });
 
 test('live provider details are read through for a synced domain', async () => {

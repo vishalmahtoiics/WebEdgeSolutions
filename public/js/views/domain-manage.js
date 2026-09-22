@@ -1,7 +1,7 @@
 import {
   api, el, clear, appendAll, field, submitHandler, toast, openModal, confirmModal,
   statusBadge, sourceBadge, techBadge, TECH_SOURCE_LABEL,
-  emptyState, errorAlert, formatDate, relativeTime, formatMb,
+  emptyState, errorAlert, formatDate, relativeTime, formatMb, tableView,
 } from '../core.js';
 import { icon } from '../icons.js';
 import { navigate, refresh } from '../app.js';
@@ -445,8 +445,11 @@ function dnsPanel(data, isAdmin) {
     }
   };
 
-  const rows = data.dnsRecords.map((r) =>
-    el(
+  // Paired with the text to search on: a busy zone runs to dozens of records,
+  // and the one being looked for is usually known by name or by value.
+  const rows = data.dnsRecords.map((r) => ({
+    text: `${r.name} ${r.type} ${r.content}`,
+    node: el(
       'tr',
       {},
       el('td', { class: 'mono break' }, r.name),
@@ -498,7 +501,7 @@ function dnsPanel(data, isAdmin) {
         ),
       ),
     ),
-  );
+  }));
 
   return el(
     'div',
@@ -526,11 +529,9 @@ function dnsPanel(data, isAdmin) {
     data.dnsRecords.length
       ? el(
           'div',
-          { class: 'card-body tight table-scroll' },
-          el(
-            'table',
-            {},
-            el(
+          { class: 'card-body tight' },
+          tableView({
+            head: el(
               'thead',
               {},
               el(
@@ -544,8 +545,10 @@ function dnsPanel(data, isAdmin) {
                 el('th', {}, ''),
               ),
             ),
-            el('tbody', {}, rows),
-          ),
+            rows,
+            noun: { one: 'record', many: 'records' },
+            searchPlaceholder: 'Search records…',
+          }),
         )
       : el(
           'div',
@@ -668,8 +671,11 @@ function emailPanel(data, isAdmin) {
     }
   };
 
-  const rows = data.emailAccounts.map((m) =>
-    el(
+  // Paired with the text to search on. A domain can easily hold fifty
+  // mailboxes, and scrolling is not a way to find one.
+  const rows = data.emailAccounts.map((m) => ({
+    text: `${m.address} ${m.status || ''}`,
+    node: el(
       'tr',
       {},
       el('td', { class: 'strong break' }, m.address),
@@ -716,7 +722,7 @@ function emailPanel(data, isAdmin) {
         el('button', { class: 'btn sm danger', onclick: () => deleteMailboxModal(d, m, canWrite) }, 'Delete'),
       ),
     ),
-  );
+  }));
 
   const panel = el('div');
   const mailboxCard = el(
@@ -748,11 +754,9 @@ function emailPanel(data, isAdmin) {
     data.emailAccounts.length
       ? el(
           'div',
-          { class: 'card-body tight table-scroll' },
-          el(
-            'table',
-            {},
-            el(
+          { class: 'card-body tight' },
+          tableView({
+            head: el(
               'thead',
               {},
               el(
@@ -765,8 +769,10 @@ function emailPanel(data, isAdmin) {
                 el('th', {}, ''),
               ),
             ),
-            el('tbody', {}, rows),
-          ),
+            rows,
+            noun: { one: 'mailbox', many: 'mailboxes' },
+            searchPlaceholder: 'Search mailboxes…',
+          }),
         )
       : el(
           'div',

@@ -8,7 +8,7 @@
 
 import {
   api, el, clear, fill, appendAll, field, submitHandler, toast, errorAlert,
-  emptyState, formatDate, openModal, confirmModal,
+  emptyState, formatDate, openModal, confirmModal, tableView,
 } from '../core.js';
 import { icon } from '../icons.js';
 import { navigate, refresh } from '../app.js';
@@ -113,7 +113,7 @@ export async function renderBilling({ param, user }) {
 }
 
 function documentTable(title, documents, isAdmin, store) {
-  const body = el('div', { class: 'card-body tight table-scroll' });
+  const body = el('div', { class: 'card-body tight' });
 
   if (!documents.length) {
     fill(
@@ -127,10 +127,8 @@ function documentTable(title, documents, isAdmin, store) {
   } else {
     fill(
       body,
-      el(
-        'table',
-        {},
-        el(
+      tableView({
+        head: el(
           'thead',
           {},
           el(
@@ -144,11 +142,11 @@ function documentTable(title, documents, isAdmin, store) {
             el('th', {}, ''),
           ),
         ),
-        el(
-          'tbody',
-          {},
-          documents.map((doc) =>
-            el(
+        noun: { one: title.toLowerCase().replace(/s$/, ''), many: title.toLowerCase() },
+        searchPlaceholder: `Search ${title.toLowerCase()}…`,
+        rows: documents.map((doc) => ({
+          text: `${doc.number} ${doc.customerName} ${doc.domain?.name || ''} ${doc.status}`,
+          node: el(
               'tr',
               {},
               el(
@@ -178,10 +176,9 @@ function documentTable(title, documents, isAdmin, store) {
                 { class: 'right nowrap' },
                 el('button', { class: 'btn sm', onclick: () => navigate(`billing/${doc.id}`) }, 'Open'),
               ),
-            ),
           ),
-        ),
-      ),
+        })),
+      }),
     );
   }
 

@@ -1,6 +1,6 @@
 import {
   api, el, clear, fill, field, submitHandler, toast, openModal, statusBadge, sourceBadge,
-  techBadge, emptyState, formatDate,
+  techBadge, emptyState, formatDate, tableView,
 } from '../core.js';
 import { refresh, navigate } from '../app.js';
 
@@ -58,60 +58,37 @@ export async function renderDomains({ user }) {
     return frag;
   }
 
-  const search = el('input', {
-    type: 'text',
-    placeholder: 'Search domains or technology…',
-    style: 'max-width:280px',
-  });
-
-  const tbody = el('tbody');
-  const draw = (list) => {
-    tbody.replaceChildren(
-      ...list.map((d) =>
+  // Paired with the text the search box matches on. Searching and paging both
+  // live in the table now, so the two cannot disagree about which rows exist.
+  const rows = domains.map((d) => ({
+    text: `${d.name} ${d.technology?.name || ''} ${d.status || ''}`,
+    node: el(
+      'tr',
+      { style: 'cursor:pointer', onclick: () => navigate(`domain/${d.id}`) },
+      el('td', {}, el('div', { class: 'strong' }, d.name)),
+      isAdmin ? el('td', {}, sourceBadge(d.sourceLabel, d.source)) : null,
+      el('td', {}, statusBadge(d.status)),
+      el('td', {}, techBadge(d.technology)),
+      el('td', { class: 'small muted nowrap' }, formatDate(d.expiresAt)),
+      el('td', { class: 'small' }, String(d.emailCount)),
+      isAdmin ? el('td', { class: 'small' }, String(d.userCount)) : null,
+      el(
+        'td',
+        { class: 'actions' },
         el(
-          'tr',
-          { style: 'cursor:pointer', onclick: () => navigate(`domain/${d.id}`) },
-          el('td', {}, el('div', { class: 'strong' }, d.name)),
-          isAdmin ? el('td', {}, sourceBadge(d.sourceLabel, d.source)) : null,
-          el('td', {}, statusBadge(d.status)),
-          el('td', {}, techBadge(d.technology)),
-          el('td', { class: 'small muted nowrap' }, formatDate(d.expiresAt)),
-          el('td', { class: 'small' }, String(d.emailCount)),
-          isAdmin ? el('td', { class: 'small' }, String(d.userCount)) : null,
-          el(
-            'td',
-            { class: 'actions' },
-            el(
-              'button',
-              {
-                class: 'btn sm',
-                onclick: (e) => {
-                  e.stopPropagation();
-                  navigate(`domain/${d.id}`);
-                },
-              },
-              'Manage',
-            ),
-          ),
+          'button',
+          {
+            class: 'btn sm',
+            onclick: (e) => {
+              e.stopPropagation();
+              navigate(`domain/${d.id}`);
+            },
+          },
+          'Manage',
         ),
       ),
-    );
-    if (!list.length) {
-      tbody.append(el('tr', {}, el('td', { colspan: isAdmin ? 8 : 6 }, emptyState('search', 'No matches'))));
-    }
-  };
-
-  search.oninput = () => {
-    const q = search.value.trim().toLowerCase();
-    draw(
-      q
-        ? domains.filter(
-            (d) => d.name.includes(q) || (d.technology?.name || '').toLowerCase().includes(q),
-          )
-        : domains,
-    );
-  };
-  draw(domains);
+    ),
+  }));
 
   frag.append(
     el(
@@ -121,15 +98,12 @@ export async function renderDomains({ user }) {
         'div',
         { class: 'card-head' },
         el('div', { class: 'grow' }, el('h2', {}, `${domains.length} domain${domains.length === 1 ? '' : 's'}`)),
-        search,
       ),
       el(
         'div',
-        { class: 'card-body tight table-scroll' },
-        el(
-          'table',
-          {},
-          el(
+        { class: 'card-body tight' },
+        tableView({
+          head: el(
             'thead',
             {},
             el(
@@ -145,8 +119,10 @@ export async function renderDomains({ user }) {
               el('th', {}, ''),
             ),
           ),
-          tbody,
-        ),
+          rows,
+          noun: { one: 'domain', many: 'domains' },
+          searchPlaceholder: 'Search domains or technology…',
+        }),
       ),
     ),
   );

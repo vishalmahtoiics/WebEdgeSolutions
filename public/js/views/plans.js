@@ -6,7 +6,7 @@
 
 import {
   api, el, clear, fill, appendAll, field, submitHandler, toast, openModal,
-  confirmModal, emptyState, errorAlert,
+  confirmModal, emptyState, errorAlert, tableView,
 } from '../core.js';
 import { icon } from '../icons.js';
 import { refresh } from '../app.js';
@@ -226,8 +226,9 @@ const stripCurrency = (text) => String(text || '').replace(/[^\d.]/g, '');
 // ---------------------------------------------------------------------------
 
 function tldCard(tlds) {
-  const rows = tlds.map((t) =>
-    el(
+  const rows = tlds.map((t) => ({
+    text: `.${t.tld}`,
+    node: el(
       'tr',
       {},
       el('td', { class: 'mono strong' }, `.${t.tld}`),
@@ -264,7 +265,7 @@ function tldCard(tlds) {
         ),
       ),
     ),
-  );
+  }));
 
   return el(
     'div',
@@ -283,17 +284,17 @@ function tldCard(tlds) {
     tlds.length
       ? el(
           'div',
-          { class: 'card-body tight table-scroll' },
-          el(
-            'table',
-            {},
-            el(
+          { class: 'card-body tight' },
+          tableView({
+            head: el(
               'thead',
               {},
               el('tr', {}, el('th', {}, 'Ending'), el('th', {}, 'Register'), el('th', {}, 'Renews at'), el('th', {}, 'Status'), el('th', {}, '')),
             ),
-            el('tbody', {}, rows),
-          ),
+            rows,
+            noun: { one: 'ending', many: 'endings' },
+            searchPlaceholder: 'Search endings…',
+          }),
         )
       : el(
           'div',

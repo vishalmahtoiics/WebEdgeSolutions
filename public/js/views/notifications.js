@@ -7,10 +7,14 @@
 
 import {
   api, el, clear, fill, appendAll, field, submitHandler, toast, errorAlert,
-  emptyState, relativeTime, formatDate,
+  emptyState, relativeTime, formatDate, tableView,
 } from '../core.js';
 import { icon } from '../icons.js';
 import { refresh } from '../app.js';
+
+/// How much of the record to fetch at once. The feed is paged rather than
+/// scrolled now, so this is the server's own ceiling rather than a screenful.
+const FEED_TAKE = 200;
 
 /// The areas, in the order they are worth being told about.
 const AREAS = [
@@ -39,7 +43,7 @@ const EVENT_TONE = (event) => {
 export async function renderNotifications() {
   const [{ settings }, feed, jobsResult] = await Promise.all([
     api('/settings'),
-    api('/settings/activity?take=60').catch(() => ({ entries: [], total: 0, undelivered: 0 })),
+    api(`/settings/activity?take=${FEED_TAKE}`).catch(() => ({ entries: [], total: 0, undelivered: 0 })),
     api('/settings/jobs').catch(() => ({ jobs: [] })),
   ]);
 
@@ -470,7 +474,7 @@ function activityCard(feed) {
     ].map(([value, label]) => el('option', { value }, label)),
   );
 
-  const body = el('div', { class: 'card-body tight table-scroll feed-scroll' });
+  const body = el('div', { class: 'card-body tight' });
 
   const draw = (entries) => {
     if (!entries.length) {
@@ -486,19 +490,20 @@ function activityCard(feed) {
 
     fill(
       body,
-      el(
-        'table',
-        {},
-        el(
+      tableView({
+        head: el(
           'thead',
           {},
           el('tr', {}, el('th', {}, 'When'), el('th', {}, 'What happened'), el('th', {}, 'Who'), el('th', {}, 'Alert')),
         ),
-        el(
-          'tbody',
-          {},
-          entries.map((e) =>
-            el(
+        noun: { one: 'change', many: 'changes' },
+        searchPlaceholder: 'Search this page of the record…',
+        // Says plainly that the box only looks at what has been loaded, so
+        // finding nothing is never mistaken for nothing having happened.
+        searchHint: `Searches the ${entries.length} most recent`,
+        rows: entries.map((e) => ({
+          text: [e.event, e.summary, e.detail, e.domainName, e.actorLabel, e.ip].filter(Boolean).join(' '),
+          node: el(
               'tr',
               {},
               el(
@@ -533,17 +538,16 @@ function activityCard(feed) {
                     ? el('span', { class: 'badge warn', title: e.notifyError }, 'Not sent')
                     : el('span', { class: 'muted' }, '—'),
               ),
-            ),
           ),
-        ),
-      ),
+        })),
+      }),
     );
   };
 
   filter.onchange = async () => {
     fill(body, el('div', { class: 'card-body muted small' }, 'Loading…'));
     try {
-      const res = await api(`/settings/activity?take=60${filter.value ? `&event=${filter.value}` : ''}`);
+      const res = await api(`/settings/activity?take=${FEED_TAKE}${filter.value ? `&event=${filter.value}` : ''}`);
       draw(res.entries);
     } catch (err) {
       fill(body, el('div', { style: 'padding:20px' }, errorAlert(err)));

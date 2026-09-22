@@ -8,7 +8,7 @@
 
 import {
   api, el, clear, fill, appendAll, field, submitHandler, toast, openModal,
-  confirmModal, emptyState, formatDate, relativeTime,
+  confirmModal, emptyState, formatDate, relativeTime, tableView,
 } from '../core.js';
 import { icon } from '../icons.js';
 import { refresh, navigate } from '../app.js';
@@ -104,11 +104,9 @@ export async function renderOrders() {
       orders.length
         ? el(
             'div',
-            { class: 'card-body tight table-scroll' },
-            el(
-              'table',
-              {},
-              el(
+            { class: 'card-body tight' },
+            tableView({
+              head: el(
                 'thead',
                 {},
                 el(
@@ -123,8 +121,12 @@ export async function renderOrders() {
                   el('th', {}, ''),
                 ),
               ),
-              el('tbody', {}, orders.map(row)),
-            ),
+              rows: orders.map(row),
+              noun: { one: 'order', many: 'orders' },
+              // The box above already searches, and it asks the server, which
+              // can see phone numbers and emails that are not in these columns.
+              search: false,
+            }),
           )
         : el(
             'div',

@@ -1,6 +1,6 @@
 import {
   api, el, field, submitHandler, toast, openModal, confirmModal,
-  emptyState, formatDate, initials,
+  emptyState, formatDate, initials, tableView,
 } from '../core.js';
 import { refresh } from '../app.js';
 
@@ -33,11 +33,9 @@ export async function renderUsers({ user: me }) {
       el('div', { class: 'card-head' }, el('h2', {}, `${users.length} user${users.length === 1 ? '' : 's'}`)),
       el(
         'div',
-        { class: 'card-body tight table-scroll' },
-        el(
-          'table',
-          {},
-          el(
+        { class: 'card-body tight' },
+        tableView({
+          head: el(
             'thead',
             {},
             el(
@@ -51,11 +49,11 @@ export async function renderUsers({ user: me }) {
               el('th', {}, ''),
             ),
           ),
-          el(
-            'tbody',
-            {},
-            users.map((u) =>
-              el(
+          noun: { one: 'user', many: 'users' },
+          searchPlaceholder: 'Search users…',
+          rows: users.map((u) => ({
+            text: `${u.name} ${u.email} ${u.role === 'SUPER_ADMIN' ? 'Super Admin' : 'User'}`,
+            node: el(
                 'tr',
                 {},
                 el(
@@ -117,10 +115,9 @@ export async function renderUsers({ user: me }) {
                       )
                     : null,
                 ),
-              ),
             ),
-          ),
-        ),
+          })),
+        }),
       ),
     ),
   );

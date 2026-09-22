@@ -395,7 +395,6 @@
 /* A feed scrolls inside its own card rather than making the page eight
    thousand pixels tall. The header stays put, so the filter is always in
    reach. */
-.feed-scroll { max-height: 620px; overflow-y: auto; }
 
 /* --- Bits and pieces ------------------------------------------------------------------ */
 

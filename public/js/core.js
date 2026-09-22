@@ -1,6 +1,7 @@
 // Small shared helpers: API calls, DOM building, formatting, toasts, modals.
 
 import { icon } from './icons.js';
+import { PAGE_SIZES, SHOW_ALL, readPageSize, writePageSize, pageSlice, pageWindow } from './paging.js';
 
 // --- API -------------------------------------------------------------------
 
@@ -147,6 +148,182 @@ export const TECH_SOURCE_LABEL = {
 
 export const initials = (name = '') =>
   name.trim().split(/\s+/).slice(0, 2).map((p) => p[0]?.toUpperCase() || '').join('') || '?';
+
+// --- Tables ----------------------------------------------------------------
+
+// The arithmetic lives in paging.js, where it can be tested without a browser.
+
+const storedPageSize = (fallback) => readPageSize((k) => localStorage.getItem(k), fallback);
+const rememberPageSize = (size) => writePageSize((k, v) => localStorage.setItem(k, v), size);
+
+/// A table that pages, and searches once there is enough in it to be worth
+/// searching.
+///
+/// Rows arrive already built, as `{ node, text }`: `node` is the `<tr>` and
+/// `text` is whatever the search box should match. Paging then only moves
+/// existing nodes between the table and a holding array, so every button
+/// inside a row keeps the handler it was created with — nothing is rebuilt and
+/// nothing is re-fetched.
+///
+/// A plain `<tr>` is accepted in place of the pair; it simply never matches a
+/// search.
+export function tableView({
+  head,
+  rows,
+  pageSize = 25,
+  noun = { one: 'row', many: 'rows' },
+  searchPlaceholder = 'Search…',
+  searchHint = null,
+  // Off where the page already has a search of its own — usually one that asks
+  // the server, and so sees more than the rows currently loaded. Two search
+  // boxes over one table is a way to get two different answers.
+  search: searchable = true,
+}) {
+  const items = rows.map((r) => (r instanceof Node ? { node: r, text: '' } : r));
+
+  let size = storedPageSize(pageSize);
+  let page = 1;
+  let query = '';
+
+  const body = el('tbody');
+  const table = el('table', {}, head, body);
+  const status = el('div', { class: 'small muted grow' });
+  const pager = el('div', { class: 'table-pager' });
+  const scroll = el('div', { class: 'table-scroll' }, table);
+
+  const search = el('input', {
+    type: 'search',
+    class: 'table-search',
+    placeholder: searchPlaceholder,
+    'aria-label': searchPlaceholder,
+    oninput: () => {
+      query = search.value.trim().toLowerCase();
+      page = 1;
+      draw();
+    },
+  });
+
+  const sizeSelect = el(
+    'select',
+    {
+      class: 'table-size',
+      'aria-label': `${noun.many} per page`,
+      onchange: () => {
+        size = Number(sizeSelect.value);
+        rememberPageSize(size);
+        page = 1;
+        draw();
+      },
+    },
+    PAGE_SIZES.map((n) => el('option', { value: String(n), selected: n === size }, `${n} per page`)),
+    el('option', { value: String(SHOW_ALL), selected: size === SHOW_ALL }, 'Show all'),
+  );
+
+  // The controls only appear when they would do something. A table of four
+  // rows does not need a search box above it.
+  const tools = el(
+    'div',
+    { class: 'table-tools' },
+    searchable ? search : null,
+    searchable && searchHint ? el('span', { class: 'small muted hide-sm' }, searchHint) : null,
+    el('span', { class: 'grow' }),
+    sizeSelect,
+  );
+
+  function draw() {
+    const matching = query
+      ? items.filter((i) => i.text.toLowerCase().includes(query))
+      : items;
+
+    const at = pageSlice(matching.length, page, size);
+    page = at.page;
+    const slice = matching.slice(at.start, at.end);
+
+    fill(body, slice.map((i) => i.node));
+
+    if (!matching.length) {
+      fill(
+        body,
+        el(
+          'tr',
+          { class: 'is-blank' },
+          el(
+            'td',
+            { colspan: String(head.querySelectorAll('th').length || 1), class: 'muted', style: 'text-align:center' },
+            query ? `Nothing here matches “${search.value.trim()}”.` : 'Nothing to show.',
+          ),
+        ),
+      );
+    }
+
+    // Plain counting, in the reader's terms. "Showing 26–50 of 52" answers
+    // both "where am I" and "how much is there" without them doing sums.
+    const word = matching.length === 1 ? noun.one : noun.many;
+    status.textContent = matching.length
+      ? at.last === 1
+        ? `${matching.length} ${word}${query ? ` matching, of ${items.length}` : ''}`
+        : `Showing ${at.firstRow}–${at.lastRow} of ${matching.length} ${word}${
+            query ? `, filtered from ${items.length}` : ''
+          }`
+      : `No ${noun.many}`;
+
+    clear(pager);
+    pager.append(status);
+
+    if (at.last > 1) {
+      const go = (n) => () => {
+        page = n;
+        draw();
+        // Back to the top of the table, not the top of the page: the reader
+        // was looking at this table and should still be.
+        scroll.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      };
+
+      pager.append(
+        el(
+          'div',
+          { class: 'pages', role: 'navigation', 'aria-label': `${noun.many} pages` },
+          el(
+            'button',
+            { class: 'btn sm', disabled: page === 1, onclick: go(page - 1), 'aria-label': 'Previous page' },
+            '‹',
+          ),
+          pageWindow(page, at.last).map((n) =>
+            n === null
+              ? el('span', { class: 'gap', 'aria-hidden': 'true' }, '…')
+              : el(
+                  'button',
+                  {
+                    class: `btn sm ${n === page ? 'primary' : ''}`,
+                    onclick: go(n),
+                    'aria-current': n === page ? 'page' : null,
+                    'aria-label': `Page ${n}`,
+                  },
+                  String(n),
+                ),
+          ),
+          el(
+            'button',
+            { class: 'btn sm', disabled: page === at.last, onclick: go(page + 1), 'aria-label': 'Next page' },
+            '›',
+          ),
+        ),
+      );
+    }
+  }
+
+  draw();
+
+  return el(
+    'div',
+    { class: 'table-view' },
+    items.length > PAGE_SIZES[0] ? tools : null,
+    scroll,
+    // With one short page and no search there is nothing to say: the rows are
+    // all there, in front of the reader, and a count would just be noise.
+    items.length > PAGE_SIZES[0] ? pager : null,
+  );
+}
 
 // --- Toasts ----------------------------------------------------------------
 

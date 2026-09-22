@@ -1,4 +1,4 @@
-import { api, el, statusBadge, emptyState, formatMb } from '../core.js';
+import { api, el, statusBadge, emptyState, formatMb, tableView } from '../core.js';
 import { navigate } from '../app.js';
 import {
   createMailboxModal,
@@ -65,8 +65,11 @@ export async function renderEmails({ user }) {
 }
 
 function domainCard(domain, isAdmin) {
-  const rows = domain.emails.map((m) =>
-    el(
+  // Paired with the text to search on, so a domain with fifty mailboxes can be
+  // narrowed to the one being looked for instead of scrolled through.
+  const rows = domain.emails.map((m) => ({
+    text: `${m.address} ${m.status || ''}`,
+    node: el(
       'tr',
       {},
       el('td', { class: 'strong break' }, m.address),
@@ -118,7 +121,7 @@ function domainCard(domain, isAdmin) {
         ),
       ),
     ),
-  );
+  }));
 
   return el(
     'div',
@@ -151,11 +154,9 @@ function domainCard(domain, isAdmin) {
     domain.emails.length
       ? el(
           'div',
-          { class: 'card-body tight table-scroll' },
-          el(
-            'table',
-            {},
-            el(
+          { class: 'card-body tight' },
+          tableView({
+            head: el(
               'thead',
               {},
               el(
@@ -168,8 +169,10 @@ function domainCard(domain, isAdmin) {
                 el('th', {}, ''),
               ),
             ),
-            el('tbody', {}, rows),
-          ),
+            rows,
+            noun: { one: 'mailbox', many: 'mailboxes' },
+            searchPlaceholder: 'Search mailboxes…',
+          }),
         )
       : el(
           'div',

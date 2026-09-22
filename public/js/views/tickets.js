@@ -8,7 +8,7 @@
 
 import {
   api, el, clear, fill, appendAll, field, submitHandler, toast, errorAlert,
-  emptyState, relativeTime, formatDate, openModal,
+  emptyState, relativeTime, formatDate, openModal, tableView,
 } from '../core.js';
 import { icon } from '../icons.js';
 import { navigate, refresh } from '../app.js';
@@ -85,7 +85,7 @@ export async function renderTickets({ param, user }) {
 }
 
 function ticketList(tickets, isAdmin) {
-  const body = el('div', { class: 'card-body tight table-scroll' });
+  const body = el('div', { class: 'card-body tight' });
 
   if (!tickets.length) {
     fill(
@@ -103,10 +103,8 @@ function ticketList(tickets, isAdmin) {
   } else {
     fill(
       body,
-      el(
-        'table',
-        {},
-        el(
+      tableView({
+        head: el(
           'thead',
           {},
           el(
@@ -120,11 +118,13 @@ function ticketList(tickets, isAdmin) {
             el('th', {}, ''),
           ),
         ),
-        el(
-          'tbody',
-          {},
-          tickets.map((t) =>
-            el(
+        noun: { one: 'ticket', many: 'tickets' },
+        searchPlaceholder: 'Search tickets…',
+        rows: tickets.map((t) => ({
+          text: [t.reference, t.subject, t.category, t.domain?.name, isAdmin ? t.user?.name : null, isAdmin ? t.user?.email : null]
+            .filter(Boolean)
+            .join(' '),
+          node: el(
               'tr',
               {},
               el('td', { class: 'mono small muted nowrap' }, t.reference),
@@ -155,10 +155,9 @@ function ticketList(tickets, isAdmin) {
                 relativeTime(t.lastReplyAt),
               ),
               el('td', { class: 'right' }, el('button', { class: 'btn sm', onclick: () => navigate(`support/${t.id}`) }, 'Open')),
-            ),
           ),
-        ),
-      ),
+        })),
+      }),
     );
   }
 

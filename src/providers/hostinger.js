@@ -92,6 +92,77 @@ function unwrap(body) {
   return [];
 }
 
+/// The page to ask for after this one, or null when this is the last.
+///
+/// Hostinger's paginated responses carry a `meta` block in the usual shape:
+/// `current_page`, `last_page`, `per_page`, `total`. Some also carry a
+/// `links.next` URL and nothing else, so that is read as a fallback.
+function nextPage(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+
+  const meta = body.meta && typeof body.meta === 'object' ? body.meta : body;
+  const num = (v) => {
+    const n = Number(v);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  };
+
+  const current = num(meta.current_page ?? meta.currentPage) || 1;
+
+  let last = num(meta.last_page ?? meta.lastPage);
+  if (!last) {
+    const total = num(meta.total);
+    const perPage = num(meta.per_page ?? meta.perPage);
+    if (total && perPage) last = Math.ceil(total / perPage);
+  }
+  if (last) return current < last ? current + 1 : null;
+
+  const link = body.links?.next ?? body.next_page_url;
+  const match = typeof link === 'string' ? /[?&]page=(\d+)/.exec(link) : null;
+  return match ? Number(match[1]) : null;
+}
+
+/// Every row of a list endpoint, not just the first page of it.
+///
+/// This API paginates its lists and defaults to 15 rows a page. Reading only
+/// `data` therefore read only the first 15 of everything: 15 mailboxes on a
+/// domain that has 50, 15 domains on an account that has more, and — because
+/// a mail order is found by scanning the order list — "no email plan" for any
+/// domain whose order happened to sit on page two. Worse for mailboxes, sync
+/// deletes provider rows it did not see, so every sync threw away the 35 it
+/// never asked for.
+///
+/// The first request is sent exactly as before, with no query string, so an
+/// endpoint that does not paginate behaves identically to the day this was
+/// written. Further pages are asked for only when the response itself says
+/// there are more, which also means `page` is known to be supported there.
+async function requestAll(token, path, { maxPages = 200 } = {}) {
+  const first = await request(token, path);
+
+  // A bare array is the whole answer: no envelope, nothing to page through.
+  if (Array.isArray(first)) return first;
+
+  const rows = unwrap(first);
+  const sep = path.includes('?') ? '&' : '?';
+  let body = first;
+
+  // The cap is a runaway guard, not a limit anyone should reach: 200 pages is
+  // far more than any real account holds. It exists so a `meta` that always
+  // claims one more page cannot loop for ever.
+  for (let fetched = 1; fetched < maxPages; fetched += 1) {
+    const page = nextPage(body);
+    if (!page) break;
+
+    body = await request(token, `${path}${sep}page=${page}`);
+    const batch = unwrap(body);
+    // The server ran out earlier than `meta` said it would. Stop rather than
+    // spin.
+    if (!batch.length) break;
+    rows.push(...batch);
+  }
+
+  return rows;
+}
+
 function toDate(value) {
   if (!value) return null;
   const d = new Date(value);
@@ -102,7 +173,7 @@ function toDate(value) {
 /// than a domain in Hostinger's model, so nothing mail-related can happen
 /// without one.
 async function findMailOrder(token, domainName) {
-  const orders = unwrap(await request(token, '/api/mail/v1/orders'));
+  const orders = await requestAll(token, '/api/mail/v1/orders');
   const wanted = String(domainName).toLowerCase();
 
   const order = orders.find((o) => {
@@ -165,10 +236,13 @@ export const hostingerAdapter = {
     ftp: false, // Hostinger's API does not expose FTP/FTPS credentials.
   },
 
-  /// Cheapest authenticated call we can make; proves the token works.
+  /// Proves the token works, and says how many domains it can see.
+  ///
+  /// It reads the whole portfolio rather than one page of it, because a count
+  /// that stops at 15 would be worse than no count at all — it reads as "this
+  /// is your account" to someone who has fifty domains.
   async testConnection(token) {
-    const body = await request(token, '/api/domains/v1/portfolio');
-    const domains = unwrap(body);
+    const domains = await requestAll(token, '/api/domains/v1/portfolio');
     return {
       ok: true,
       message: `Connection successful. Found ${domains.length} domain${domains.length === 1 ? '' : 's'} on this account.`,
@@ -179,7 +253,7 @@ export const hostingerAdapter = {
   /// Domains from the registrar portfolio, merged with hosted websites so
   /// domains that are hosted but registered elsewhere still show up.
   async listDomains(token) {
-    const portfolio = unwrap(await request(token, '/api/domains/v1/portfolio'));
+    const portfolio = await requestAll(token, '/api/domains/v1/portfolio');
 
     const byName = new Map();
     for (const item of portfolio) {
@@ -197,7 +271,7 @@ export const hostingerAdapter = {
     // Hosted websites are a best-effort enrichment: some plans/tokens cannot
     // read them, which must not fail the whole sync.
     try {
-      const websites = unwrap(await request(token, '/api/hosting/v1/websites'));
+      const websites = await requestAll(token, '/api/hosting/v1/websites');
       for (const site of websites) {
         if (!site?.domain) continue;
         const existing = byName.get(site.domain);
@@ -249,14 +323,13 @@ export const hostingerAdapter = {
     // domain is registered there but its DNS is hosted elsewhere. That is a
     // fact about the domain, not a failure, so it reads as an empty zone
     // rather than souring a whole account sync.
-    let body;
+    let groups;
     try {
-      body = await request(token, `/api/dns/v1/zones/${encodeURIComponent(domainName)}`);
+      groups = await requestAll(token, `/api/dns/v1/zones/${encodeURIComponent(domainName)}`);
     } catch (err) {
       if (err.status === 404) return [];
       throw err;
     }
-    const groups = unwrap(body);
     const flat = [];
     for (const group of groups) {
       const entries = Array.isArray(group?.records) ? group.records : [];
@@ -282,8 +355,9 @@ export const hostingerAdapter = {
     const order = await findMailOrder(token, domainName).catch(() => null);
     if (!order?.id) return [];
 
-    const mailboxes = unwrap(
-      await request(token, `/api/mail/v1/orders/${encodeURIComponent(order.id)}/mailboxes`),
+    const mailboxes = await requestAll(
+      token,
+      `/api/mail/v1/orders/${encodeURIComponent(order.id)}/mailboxes`,
     );
     return mailboxes.filter((m) => m?.address).map(toMailbox);
   },
@@ -337,7 +411,7 @@ export const hostingerAdapter = {
     const base = `/api/mail/v1/orders/${encodeURIComponent(order.id)}`;
     const fetchList = async (path) => {
       try {
-        return unwrap(await request(token, path));
+        return await requestAll(token, path);
       } catch {
         return [];
       }
@@ -398,7 +472,9 @@ export const hostingerAdapter = {
   /// This is the shape that gets written back, so it must stay untouched.
   async getDnsZoneRaw(token, domainName) {
     try {
-      return unwrap(await request(token, `/api/dns/v1/zones/${encodeURIComponent(domainName)}`));
+      // Read short, write short: this zone is handed straight back to a
+      // whole-zone PUT, so a missing page would be a deletion.
+      return await requestAll(token, `/api/dns/v1/zones/${encodeURIComponent(domainName)}`);
     } catch (err) {
       if (err.status === 404) return [];
       throw err;
@@ -501,7 +577,7 @@ export const hostingerAdapter = {
 
   /// VPS instances on the account, shown read-only in the Super Admin area.
   async listServers(token) {
-    const machines = unwrap(await request(token, '/api/vps/v1/virtual-machines'));
+    const machines = await requestAll(token, '/api/vps/v1/virtual-machines');
     return machines.map((vm) => ({
       id: vm.id != null ? String(vm.id) : null,
       hostname: vm.hostname || null,
