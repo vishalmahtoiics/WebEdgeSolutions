@@ -35,6 +35,7 @@ const AREA_SWITCH = {
   support: 'notifySupport',
   schedule: 'notifySchedule',
   billing: 'notifyBilling',
+  deploy: 'notifyDeploy',
 };
 
 /// How many alerts may be sent in a rolling window before the rest are

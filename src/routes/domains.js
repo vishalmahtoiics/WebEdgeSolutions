@@ -17,6 +17,7 @@ import {
   canWriteZone,
 } from '../services/dnsService.js';
 import { filesRouter } from './files.js';
+import { deploymentsRouter } from './deployments.js';
 import { webmailRouter } from './webmail.js';
 import { databaseRouter } from './database.js';
 import {
@@ -459,6 +460,10 @@ domainsRouter.put(
 // Mounted through withDomain, so every file route inherits the same check as
 // the rest of the domain: a user reaches only domains assigned to them.
 domainsRouter.use('/:id/files', withDomain(), filesRouter);
+
+// Deploying writes to the same filesystem the file manager reads, so it sits
+// behind the same gate.
+domainsRouter.use('/:id/deployments', withDomain(), deploymentsRouter);
 
 // Same guard for the database: a user reaches only their own domain's, and the
 // credentials are read server-side on every call.

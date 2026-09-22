@@ -724,6 +724,74 @@ to 10 per ten minutes, because it sends real mail through somebody's server.
 
 ---
 
+## Deploying a website
+
+The **Deploy** tab on a domain puts a website onto the hosting account: upload
+a `.zip`, or give a public git URL, and the files are written into the web root
+over the FTP, FTPS or SFTP connection already stored for that domain.
+
+**It uploads files. It does not run anything.** No build step, no install, not
+one line of the code being deployed. That is not an omission — running a
+customer's build here would run their code with this process's access to the
+database and to every provider token and FTP password it holds. A build step is
+a reasonable thing to want and it needs a sandbox; until there is one, this
+refuses to pretend. Deploy a finished site: plain HTML, PHP, WordPress, or the
+contents of your `dist` / `build` folder after you have built it on your own
+machine.
+
+**Preview, then deploy.** The plan is worked out and shown first — how many
+files are new, changed, deleted or unchanged, with the paths. The deploy button
+stays disabled until a preview has been run, and any change to the form
+disables it again, because "this will delete 412 files" is only useful before
+the event.
+
+**Every deploy can be undone.** Whatever is about to be overwritten or deleted
+is moved aside into `.portal-backups/` first — moved, not copied, because a
+rename costs no bandwidth, which is what makes backing up affordable enough to
+do every single time. The record says exactly which files were created and
+which were moved where, so rolling back is deleting the first list and moving
+the second one back rather than a guess. The last five backups are kept.
+
+**Two modes.** By default a deploy only adds and replaces. Tick *Replace the
+site* to also delete what is on the server but not in your source — and list
+the paths to keep, for the folders a customer writes to. A plan that would
+delete almost everything and put back almost nothing is refused outright, with
+an override for somebody who means it: that is what a zip built from the wrong
+folder looks like from here, and it is a far more common way to destroy a
+website than anything an attacker does.
+
+**A second deploy of a large site takes seconds.** Each deploy records a
+fingerprint of what it wrote, so a file whose content has not changed is not
+sent again. A file edited directly on the server will look unchanged to that
+comparison — *Upload everything again* is for exactly that case.
+
+### What an archive is not allowed to do
+
+A zip is not data, it is a set of instructions for writing files, and the
+instructions come from outside. Three of them are attacks old enough to have
+names, and all three are refused:
+
+| | |
+| --- | --- |
+| **Zip Slip** | An entry called `../../../../etc/passwd` is a legal zip entry. Every path is resolved and *then* checked to be inside the destination — after resolving, because `a/../../b` only looks safe before. |
+| **Zip bombs** | A megabyte of zip can hold a terabyte of zeroes. The header is not trusted: the uncompressed size is counted as it is read, and reading stops the moment the running total passes the cap. |
+| **Symlinks** | A zip can carry a link pointing at `/etc`, and a later entry can then write *through* it. Links are refused outright — this deploys websites, and nothing here needs one. |
+
+Also refused: absolute paths, Windows drive letters, filenames containing a
+null byte, and anything nesting more than 24 folders deep.
+
+And some files never reach a web root whatever the archive says — `.git`,
+`node_modules`, `.DS_Store`, and every form of `.env`. That last one matters
+most: a stray `.env` in a public directory publishes the database password of
+whoever owns the site, and it is served as plain text by every default Apache
+and nginx configuration.
+
+Only `https://` repository URLs are accepted, and only without credentials in
+them: a token in a URL ends up written into the deployment record and into
+every log line of the clone, which is how tokens leak. Private repositories
+need a stored credential with its own encryption — a later feature, not
+something to smuggle in through a text field.
+
 ## Overnight jobs
 
 Two things can happen on their own, once a day, and both are off until you
@@ -973,9 +1041,9 @@ already running instead, which is useful against a deployment.
 
 Covers authentication, two-factor sign-in, authorization boundaries, provider
 configuration, credential handling, domains, DNS, email, files, webmail,
-technology detection, the database tools, GST invoicing, support tickets and
-the overnight jobs, plus the full sync flow including the no-duplicates
-guarantee.
+technology detection, the database tools, GST invoicing, support tickets,
+website deploys and the overnight jobs, plus the full sync flow including the
+no-duplicates guarantee.
 
 **The suites run one at a time**, which is why `npm test` passes
 `--test-concurrency=1`. They share one database and one row of application
@@ -996,6 +1064,7 @@ npm run test:file tests/billing.test.js
 | Technology detection | A real FTP server holding real WordPress, Laravel, Next.js, static and PHP trees, plus a real HTTP server serving the markup those platforms send |
 | Database | A real MySQL or MariaDB server |
 | Hostinger adapter, sync, DNS writes | A local stub serving Hostinger's documented response shapes |
+| Deploys | A real FTP server, with genuinely hostile archives built in the test itself — a Zip Slip entry, a zip bomb, a symlink pointing at the filesystem root |
 | Change alerts, support tickets, expiry reminders | A real SMTP server (`smtp-server`), with the messages parsed and read back |
 | Two-factor codes | The RFC 6238 test vectors, so every authenticator app agrees with us |
 | GST arithmetic | A sweep over every rate, quantity, discount and inclusive-pricing combination, checking the lines always reconcile with the totals |
@@ -1027,12 +1096,13 @@ scripts/
 src/
   server.js            Express app and middleware
   config.js            Environment configuration
-  lib/                 Encryption, storage, mail, SQL, DNS zones, detection, GST, TOTP, helpers
+  lib/                 Encryption, storage, mail, SQL, DNS zones, detection, GST, TOTP,
+                       archives, deploy plans, helpers
   middleware/          Authentication, authorization, validation
   providers/           Pluggable provider adapters (hostinger.js)
   routes/              API endpoints
   services/            Provider credentials, sync, store, mail, notifications,
-                       scheduler, expiry reminders, two-factor, billing, tickets
+                       scheduler, expiry reminders, two-factor, billing, tickets, deploys
 public-shared/         One design language, served at /shared and used by all three
   css/base.css         Tokens, primitives, motion — light and dark
   fonts/               Two subset variable fonts, 99 KB for the pair

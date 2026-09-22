@@ -173,6 +173,7 @@ model Domain {
   reminders     ExpiryReminder[]
   tickets       Ticket[]
   billingDocs   BillingDocument[]
+  deployments   Deployment[]
 
   @@index([providerId])
   @@map("domains")
@@ -657,6 +658,7 @@ model AppSettings {
   notifyOrders    Boolean @default(true)
   notifySecurity  Boolean @default(true)
   notifySupport   Boolean @default(true)
+  notifyDeploy    Boolean @default(true)
   notifySchedule  Boolean @default(true)
   notifyBilling   Boolean @default(true)
 
@@ -1013,4 +1015,94 @@ model TicketMessage {
 
   @@index([ticketId, createdAt])
   @@map("ticket_messages")
+}
+
+// ---------------------------------------------------------------------------
+// Deploying a website
+//
+// The portal writes files onto the hosting account over FTP, FTPS or SFTP. It
+// does not run anything it deploys — no build script, no install hook, not one
+// line of the code. Running a customer's build here would run their code with
+// this process's access to every provider token and FTP password it holds.
+//
+// Every deploy records enough to undo itself exactly: which files it created,
+// and which it moved aside and to where. Rollback is then deleting the first
+// list and moving the second one back, rather than a guess.
+// ---------------------------------------------------------------------------
+
+enum DeploySource {
+  ZIP
+  GIT
+}
+
+enum DeployStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+  ROLLED_BACK
+}
+
+model Deployment {
+  id       String @id @default(cuid())
+  domainId String
+
+  /// Per-domain and sequential, so it can be spoken about: "roll back
+  /// deploy 7". Not a cuid, which nobody can read out loud.
+  number Int
+
+  source DeploySource
+  status DeployStatus @default(RUNNING)
+
+  /// Where it came from. Only one of these sets is filled in.
+  gitUrl      String?
+  gitRef      String?
+  gitCommit   String?
+  archiveName String?
+
+  /// Relative to the domain's configured FTP root, so a deploy can target a
+  /// subfolder without ever being able to address anything above the root.
+  targetPath    String  @default("/")
+  /// Whether files on the server that are not in the source are removed.
+  /// Off is the safer default: deleting somebody's uploads folder because it
+  /// was not in the zip is the worse mistake.
+  deleteMissing Boolean @default(false)
+  /// Paths never deleted even when deleteMissing is on, comma separated.
+  keepPaths     String?
+
+  filesCreated   Int @default(0)
+  filesUpdated   Int @default(0)
+  filesDeleted   Int @default(0)
+  filesUnchanged Int @default(0)
+  bytesUploaded  Int @default(0)
+
+  /// Where the replaced files were moved to, beneath the domain's root.
+  /// Null once the backup has been pruned, which is also what marks a deploy
+  /// as no longer rollable back.
+  backupPath   String?
+  /// The files this deploy created, so rollback knows what to remove.
+  createdPaths Json?
+  /// The files it moved into the backup, so rollback knows what to restore.
+  movedAside   Json?
+
+  /// path -> sha256 of what was written. Lets the next deploy skip files that
+  /// have not changed, which is what makes a second deploy of a large site
+  /// finish in seconds. Null for a very large deploy, where the row would be
+  /// bigger than the saving is worth.
+  manifest Json?
+
+  message String?
+  error   String?
+
+  actorId    String?
+  actorLabel String?
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  durationMs Int?
+
+  domain Domain @relation(fields: [domainId], references: [id], onDelete: Cascade)
+
+  @@unique([domainId, number])
+  @@index([domainId, startedAt])
+  @@map("deployments")
 }

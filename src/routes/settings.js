@@ -80,6 +80,7 @@ const settingsSchema = z.object({
   notifySupport: z.coerce.boolean().optional(),
   notifySchedule: z.coerce.boolean().optional(),
   notifyBilling: z.coerce.boolean().optional(),
+  notifyDeploy: z.coerce.boolean().optional(),
 
   // Work that happens on its own.
   jobsEnabled: z.coerce.boolean().optional(),

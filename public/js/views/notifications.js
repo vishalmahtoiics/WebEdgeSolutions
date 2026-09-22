@@ -25,6 +25,7 @@ const AREAS = [
   ['notifySupport', 'Support tickets', 'A customer opening a ticket or replying to one.'],
   ['notifyBilling', 'Invoices', 'An invoice or quotation raised, or a payment recorded.'],
   ['notifySchedule', 'Overnight jobs', 'A domain about to expire, or a nightly sync that failed.'],
+  ['notifyDeploy', 'Deploys', 'A website deployed or rolled back. This changes a live site.'],
 ];
 
 const EVENT_TONE = (event) => {
@@ -465,6 +466,7 @@ function activityCard(feed) {
       ['support', 'Support'],
       ['billing', 'Invoices'],
       ['schedule', 'Overnight jobs'],
+      ['deploy', 'Deploys'],
     ].map(([value, label]) => el('option', { value }, label)),
   );
 

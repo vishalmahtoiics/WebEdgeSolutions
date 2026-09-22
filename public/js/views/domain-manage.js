@@ -5,6 +5,7 @@ import {
 } from '../core.js';
 import { navigate, refresh } from '../app.js';
 import { filesPanel } from './files.js';
+import { deployPanel } from './deploy.js';
 import { databasePanel, queryLogCard } from './database.js';
 import {
   createMailboxModal,
@@ -81,6 +82,7 @@ export async function renderDomainManage({ param, user }) {
     { key: 'dns', label: `DNS Records (${data.dnsRecords.length})` },
     { key: 'emails', label: `Emails (${data.emailAccounts.length})` },
     { key: 'files', label: 'Files' },
+    { key: 'deploy', label: 'Deploy' },
     // Only offered where a database is actually configured: an empty tab that
     // exists to tell you it is empty is just noise.
     ...(data.settings?.dbHost && data.settings?.dbName ? [{ key: 'database', label: 'Database' }] : []),
@@ -135,6 +137,7 @@ function renderPanel(key, data, isAdmin) {
   if (key === 'dns') return dnsPanel(data, isAdmin);
   if (key === 'emails') return emailPanel(data, isAdmin);
   if (key === 'files') return filesPanel(data.domain);
+  if (key === 'deploy') return deployPanel(data.domain);
   if (key === 'database') {
     const panel = el('div', {}, databasePanel(data.domain, data.settings));
     // The log records everyone's statements, so it belongs to the admin view.
