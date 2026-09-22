@@ -15,6 +15,9 @@ import { domainsRouter } from './routes/domains.js';
 import { usersRouter } from './routes/users.js';
 import { dashboardRouter } from './routes/dashboard.js';
 import { mailAppRouter } from './routes/mailapp.js';
+import { storeRouter } from './routes/store.js';
+import { catalogRouter } from './routes/catalog.js';
+import { ordersRouter } from './routes/orders.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -76,36 +79,74 @@ app.use('/api/users', usersRouter);
 
 app.use('/api/webmail', mailAppRouter);
 
+// The public storefront. No session required — this is the one part of the API
+// a stranger can reach, which is why prices are computed server-side and every
+// write is rate limited.
+app.use('/api/store', storeRouter);
+app.use('/api/catalog', catalogRouter);
+app.use('/api/orders', ordersRouter);
+
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Unknown API endpoint.' }));
 
-// Two front ends share this server: the admin portal, and the standalone
-// webmail app people sign in to with an email address.
+// Three front ends share this server:
 //
-// Which one you get depends on the hostname (MAIL_HOST), so webmail can live
-// at mails.example.com. /webmail works as well, for setups without a second
-// DNS name and for trying it out before the DNS exists.
-const publicDir = path.join(__dirname, '..', 'public');
+//   /          the public storefront — plans, domain search, ordering
+//   /portal    the admin and customer portal
+//   /webmail   the standalone mail app, or MAIL_HOST if one is set
+//
+// The storefront has the root because it is the part strangers arrive at. The
+// portal sits under /portal, which costs its router nothing: it addresses its
+// own views through the URL hash (#/dashboard), so the path it is served from
+// is not part of its routing at all.
+const storeDir = path.join(__dirname, '..', 'public-store');
+const portalDir = path.join(__dirname, '..', 'public');
 const mailDir = path.join(__dirname, '..', 'public-mail');
 const staticOptions = { maxAge: isProd ? '1h' : 0 };
 
 const isMailHost = (req) =>
   Boolean(config.mailHost) && String(req.hostname || '').toLowerCase() === config.mailHost;
 
-app.use('/webmail', express.static(mailDir, staticOptions));
-app.get('/webmail/*', (_req, res) => res.sendFile(path.join(mailDir, 'index.html')));
+/// Serves a single-page app from `dir` under `base`.
+///
+/// An unknown path under the base redirects to the base rather than being
+/// answered with the index. That is not a detail: every one of these apps
+/// references its assets relatively — `css/app.css` rather than
+/// `/css/app.css` — so that it works wherever it is mounted. Answering
+/// /portal/a/b with the index would make the browser resolve that stylesheet
+/// against /portal/a/, and the page would load without any styling or script.
+///
+/// Nothing is lost by redirecting, because all three apps keep their own
+/// routes in the URL fragment, and a fragment survives a redirect whose
+/// Location carries none of its own.
+const mountSpa = (base, dir) => {
+  app.use(base, express.static(dir, staticOptions));
+  app.get(base, (_req, res) => res.redirect(302, `${base}/`));
+  app.get(`${base}/*`, (req, res) =>
+    req.path === `${base}/`
+      ? res.sendFile(path.join(dir, 'index.html'))
+      : res.redirect(302, `${base}/`),
+  );
+};
 
+mountSpa('/portal', portalDir);
+mountSpa('/webmail', mailDir);
+
+// A dedicated mail hostname serves the mail app from its root instead.
 app.use((req, res, next) => {
   if (!isMailHost(req)) return next();
   return express.static(mailDir, staticOptions)(req, res, next);
 });
 
-app.use(express.static(publicDir, staticOptions));
+app.use(express.static(storeDir, staticOptions));
 
-// Any remaining path falls through to the right index.html, so client-side
-// routes survive a refresh.
-app.get('*', (req, res) =>
-  res.sendFile(path.join(isMailHost(req) ? mailDir : publicDir, 'index.html')),
-);
+// Whichever app owns the root here. Same rule as above: an unknown path
+// redirects rather than being served the index at a depth its relative asset
+// paths could not survive.
+app.get('*', (req, res) => {
+  const dir = isMailHost(req) ? mailDir : storeDir;
+  if (req.path === '/') return res.sendFile(path.join(dir, 'index.html'));
+  return res.redirect(302, '/');
+});
 
 // Error handler. Client errors carry their message through; anything else is
 // logged server-side and reported generically so internals do not leak.

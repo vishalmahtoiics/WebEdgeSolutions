@@ -36,9 +36,11 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  domains        UserDomain[]
-  serverResource ServerResource?
-  queryLog       DatabaseQueryLog[]
+  domains         UserDomain[]
+  serverResource  ServerResource?
+  queryLog        DatabaseQueryLog[]
+  ordersPlaced    Order[]            @relation("OrderCustomer")
+  ordersConfirmed Order[]            @relation("OrderConfirmedBy")
 
   @@map("users")
 }
@@ -147,6 +149,7 @@ model Domain {
   dnsRecords    DnsRecord[]
   emailAccounts EmailAccount[]
   queryLog      DatabaseQueryLog[]
+  orders        Order[]
   settings      DomainSettings?
   assignments   UserDomain[]
 
@@ -332,4 +335,181 @@ model DatabaseQueryLog {
 
   @@index([domainId, createdAt])
   @@map("database_query_log")
+}
+
+// ---------------------------------------------------------------------------
+// The storefront: what is for sale, and what people have ordered.
+//
+// Money is stored in paise as whole integers. A price is never a float — a
+// rounding error in a number somebody is asked to pay is not an acceptable
+// class of bug, and 1499.99 cannot be held exactly in binary floating point.
+// ---------------------------------------------------------------------------
+
+enum PlanKind {
+  HOSTING
+  EMAIL
+  OTHER
+}
+
+enum BillingPeriod {
+  MONTHLY
+  YEARLY
+}
+
+/// A hosting plan as it appears on the public site.
+model Plan {
+  id      String   @id @default(cuid())
+  /// Used in the public URL, so it stays stable even when the name changes.
+  slug    String   @unique
+  name    String
+  kind    PlanKind @default(HOSTING)
+  tagline String?
+
+  priceMinor    Int
+  /// Shown struck through beside the price, for a plan that is discounted.
+  wasPriceMinor Int?
+  currency      String        @default("INR")
+  billingPeriod BillingPeriod @default(YEARLY)
+
+  /// One selling point per entry, in the order they should be read.
+  features String[]
+
+  /// Hidden plans stay orderable by reference but off the public list, so a
+  /// plan can be retired without breaking the orders that already name it.
+  isActive   Boolean @default(true)
+  isFeatured Boolean @default(false)
+  sortOrder  Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders Order[]
+
+  @@index([isActive, sortOrder])
+  @@map("plans")
+}
+
+/// What one domain ending costs. A .com and a .in are genuinely different
+/// prices, so this is a list rather than a single "domain" plan.
+model TldPrice {
+  id  String @id @default(cuid())
+  /// Without the dot, lower case: "com", "co.in".
+  tld String @unique
+
+  registerMinor Int
+  /// What it costs to keep, where that differs from the first year. Shown so
+  /// nobody is surprised at renewal.
+  renewMinor    Int?
+  currency      String @default("INR")
+
+  isActive  Boolean @default(true)
+  isPopular Boolean @default(false)
+  sortOrder Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive, sortOrder])
+  @@map("tld_prices")
+}
+
+enum OrderKind {
+  HOSTING
+  DOMAIN
+}
+
+enum OrderStatus {
+  /// Placed, nothing paid yet.
+  PENDING_PAYMENT
+  /// The customer says they have paid and given a reference. Nobody has
+  /// checked. This status exists precisely because UPI cannot confirm itself.
+  PAYMENT_SUBMITTED
+  /// An administrator has seen the money arrive.
+  PAID
+  /// Set up and handed over.
+  PROVISIONED
+  CANCELLED
+}
+
+model Order {
+  id String @id @default(cuid())
+
+  /// What the customer is given, and the only key the public lookup accepts.
+  /// Random rather than sequential: it is effectively a bearer token, so it
+  /// must not be guessable from another order's.
+  reference String @unique
+
+  kind       OrderKind
+  planId     String?
+  /// The ending ordered, for a domain order.
+  tld        String?
+  /// The domain being registered, or the one hosting is for.
+  domainName String?
+
+  customerName  String
+  customerEmail String
+  customerPhone String
+  message       String?
+
+  /// Worked out on the server from the plan or the TLD. What the browser
+  /// thought the price was is never trusted.
+  amountMinor   Int
+  currency      String         @default("INR")
+  billingPeriod BillingPeriod?
+
+  status OrderStatus @default(PENDING_PAYMENT)
+
+  /// What the customer typed after paying. Unverified by definition — a UPI
+  /// reference cannot be checked from here, and anyone could invent one.
+  paymentReference   String?
+  paymentSubmittedAt DateTime?
+  paidAt             DateTime?
+  provisionedAt      DateTime?
+
+  /// Who confirmed the payment, so a money decision has a name against it.
+  confirmedById String?
+  adminNotes    String?
+
+  /// Filled in once the order has been turned into something real.
+  domainId String?
+  userId   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  plan        Plan?   @relation(fields: [planId], references: [id], onDelete: SetNull)
+  confirmedBy User?   @relation("OrderConfirmedBy", fields: [confirmedById], references: [id], onDelete: SetNull)
+  domain      Domain? @relation(fields: [domainId], references: [id], onDelete: SetNull)
+  user        User?   @relation("OrderCustomer", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@map("orders")
+}
+
+/// The one row of storefront configuration: who is selling, and how to pay.
+model StoreSettings {
+  /// A single row, addressed by a fixed id.
+  id String @id @default("default")
+
+  businessName String?
+  headline     String?
+  subheadline  String?
+  supportEmail String?
+
+  /// Where the money goes. Shown to customers, so it is deliberately not a
+  /// secret — but it is the one field that decides who gets paid, so only a
+  /// Super Admin can change it.
+  upiId        String?
+  upiPayeeName String?
+
+  /// Digits with country code, no plus or spaces: 919876543210.
+  whatsappNumber String?
+
+  currency String  @default("INR")
+  /// Closes the shop without deleting anything.
+  isOpen   Boolean @default(true)
+
+  updatedAt DateTime @updatedAt
+
+  @@map("store_settings")
 }

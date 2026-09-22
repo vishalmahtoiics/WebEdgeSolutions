@@ -21,7 +21,7 @@ npm run setup     # creates .env, runs migrations, generates the client, seeds t
 npm run dev
 ```
 
-Then open <http://localhost:3000> and sign in with the credentials printed by the
+Then open <http://localhost:3000/portal> and sign in with the credentials printed by the
 seed step (`admin@example.com` / `Admin@12345` by default).
 
 > Change the admin password from **Settings** straight after the first sign-in.
@@ -164,6 +164,91 @@ says so and lets you fill it in by hand rather than displaying placeholder data.
 **Manual entries are never overwritten by a sync.** A domain you added by hand
 is skipped during sync; a DNS record or mailbox you added or edited is kept
 while the provider-sourced ones are refreshed.
+
+---
+
+## The public storefront
+
+The root of the site is a public shop. Anyone can see what is for sale and order
+it, with no account:
+
+| | |
+| --- | --- |
+| `/` | The storefront — hosting plans, domain search, ordering, payment |
+| `/portal` | The portal, for you and your customers |
+| `/webmail` | The mail app, or `MAIL_HOST` if one is set |
+
+> **The portal moved to `/portal` when the storefront took the root.** Nothing
+> about it changed otherwise — it keeps its own routes in the URL hash, so the
+> path it is served from is not part of its routing. Update any bookmark.
+
+### What a Super Admin sets up
+
+**Plans & Pricing** in the portal holds three things:
+
+- **Hosting plans** — name, tagline, price, billing period, and the list of
+  selling points that become the ticks on the public card. One can be flagged
+  *Most popular*, and a "was" price shows struck through beside the real one.
+- **Domain prices** — one row per ending, because a `.com` and a `.in` are
+  genuinely different prices. Both the first-year and the renewal price are
+  held, and the renewal is shown to customers so nobody is surprised a year
+  later.
+- **Storefront settings** — the business name, the headline, the support email,
+  the **UPI ID** money arrives at, the payee name, and the WhatsApp number.
+
+A plan can be hidden rather than deleted, and one with orders against it is
+hidden automatically: an order has to keep saying what was bought.
+
+### How buying works
+
+1. A visitor picks a plan, or searches a name and picks an ending. The domain
+   search prices every ending and asks the registry which are free — when no
+   provider can answer, the prices still come back and availability reads
+   *Unconfirmed* rather than the page failing.
+2. They give a name, email and phone, and place the order. **The price is
+   worked out on the server** from the plan or the ending; whatever the browser
+   sent is ignored.
+3. They get an order reference and a payment page: the UPI ID with a copy
+   button, a `upi://pay` deep link that opens GPay or PhonePe with the amount
+   and reference filled in, and a QR code for paying from another device.
+4. They pay, then type the reference their app gave them.
+5. You see it in **Orders**, check your bank account, and confirm it.
+
+### UPI payments are not verified automatically
+
+This is the part people assume works the other way round, so it is worth being
+blunt: **a UPI transfer cannot report itself back to a website.** There is no
+webhook. A reference a customer types is a claim, and anybody could invent one.
+
+So the portal never marks an order paid on its own. An order moves to *Payment
+reported* when the customer says they have paid, and only a person pressing
+**I have received the money** moves it to *Paid* — and that records who pressed
+it. The public site says the same thing in the same words, so no customer is
+misled into thinking a confirmation is automatic.
+
+If you later add a real gateway, it slots into the same order model and the
+confirmation becomes automatic. Nothing else has to change.
+
+### Order references
+
+A reference is the only key the public lookup accepts, which makes it a bearer
+token. So it is random rather than sequential — around 49 bits — and drawn from
+an alphabet with both halves of each confusable pair removed (no O or 0, I or 1,
+S or 5), because these get read out over the phone.
+
+And what a reference opens is deliberately narrow: the plan, the amount, the
+status and how to pay. **Not** the customer's name, email or phone number. A
+reference will leak eventually; it should not take personal details with it.
+
+### Bounds
+
+Orders are limited to 10 per hour per address, domain searches to 40 per 15
+minutes, payment reports to 20 per hour. The store can be closed with a switch,
+which leaves the prices readable but takes no orders.
+
+> Money is stored in paise as whole integers everywhere. ₹1,499.99 cannot be
+> held exactly in binary floating point, and a rounding error in a figure
+> somebody is asked to pay is not an acceptable class of bug.
 
 ---
 
@@ -688,7 +773,11 @@ src/
   providers/           Pluggable provider adapters (hostinger.js)
   routes/              API endpoints
   services/            Provider credentials and sync logic
-public/
+public-store/          The public storefront, served at /
+  index.html           Shell
+  css/store.css        Styles
+  js/                  Storefront, ordering and payment
+public/                The portal, served at /portal
   index.html           SPA shell
   css/app.css          Styles
   js/                  Frontend modules and views
