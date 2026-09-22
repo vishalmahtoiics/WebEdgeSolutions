@@ -1,280 +1,410 @@
-/* ---------------------------------------------------------------------------
-   Webmail — same visual language as the portal, laid out as a mail client.
---------------------------------------------------------------------------- */
+/* ===========================================================================
+   The mail app.
+   ===========================================================================
+
+   Tokens, primitives and motion come from /shared/css/base.css. What is here
+   is the three-column shape a mail client needs — folders, the list of
+   messages, and the one you are reading — and the handful of things only this
+   app has.
+
+   The thing that makes a mail client feel fast is not animation, it is that
+   nothing moves when you do not expect it. So the columns are fixed, each one
+   scrolls on its own, and the only things that animate are arrivals: a list
+   filling in, a message opening.
+   =========================================================================== */
+
 :root {
-  --bg: #f4f6f9;
-  --surface: #ffffff;
-  --header: #17203a;
-  --header-soft: #232e4f;
-
-  --text: #1b2333;
-  --text-muted: #667085;
-
-  --border: #e4e8ef;
-  --border-strong: #d3d9e3;
-
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
-  --accent-soft: #eef2ff;
-
-  --ok: #0f7b56;
-  --ok-soft: #e6f6ef;
-  --warn: #9a6400;
-  --warn-soft: #fdf3e2;
-  --danger: #c02626;
-  --danger-soft: #fdeceb;
-  --star: #d99400;
-
-  --radius: 12px;
-  --radius-sm: 8px;
-  --shadow: 0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.06);
-  --shadow-lg: 0 10px 30px rgba(16,24,40,.12);
-
-  --header-h: 58px;
-  --sidebar-w: 232px;
-  --list-w: 380px;
-
-  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --rail: 232px;
+  --list: 384px;
+  --bar: 58px;
+  --star: #e0a52a;
 }
 
-* { box-sizing: border-box; }
-html, body {
-  margin: 0; padding: 0; height: 100%;
-  background: var(--bg); color: var(--text);
-  font-family: var(--font); font-size: 15px; line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
-}
-h1,h2,h3 { margin: 0; font-weight: 600; letter-spacing: -.01em; }
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-.app-loading { display: grid; place-items: center; min-height: 100vh; color: var(--text-muted); }
+.app-loading { display: grid; place-items: center; min-height: 100vh; color: var(--muted); }
 
-.muted { color: var(--text-muted); }
-.small { font-size: 13px; }
-.strong { font-weight: 600; }
-.nowrap { white-space: nowrap; }
-.break { word-break: break-word; }
-.grow { flex: 1; min-width: 0; }
-.mono { font-family: var(--mono); font-size: 13px; }
+/* --- Sign in ------------------------------------------------------------------ */
 
-/* --- Sign in -------------------------------------------------------------- */
 .login-wrap {
-  min-height: 100vh; display: grid; place-items: center; padding: 24px;
-  background: linear-gradient(160deg, var(--header) 0%, #2c3a63 100%);
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+  background: var(--bg-tint);
+  overflow: hidden;
 }
-.login-card {
-  width: 100%; max-width: 410px; background: var(--surface);
-  border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 34px;
+.login-wrap::before,
+.login-wrap::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  pointer-events: none;
 }
-.login-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; font-weight: 600; font-size: 17px; }
-.login-brand .logo {
-  width: 32px; height: 32px; border-radius: 9px; background: var(--accent);
-  color: #fff; display: grid; place-items: center;
+.login-wrap::before {
+  width: 48vw; height: 48vw; min-width: 400px; min-height: 400px;
+  top: -16%; left: -10%;
+  background: radial-gradient(circle, var(--brand) 0%, transparent 68%);
+  opacity: .40;
+  animation: drift 28s var(--ease) infinite;
 }
-.login-card h1 { font-size: 21px; margin-bottom: 4px; }
-.login-card .sub { color: var(--text-muted); font-size: 14px; margin-bottom: 24px; }
+.login-wrap::after {
+  width: 40vw; height: 40vw; min-width: 330px; min-height: 330px;
+  bottom: -18%; right: -8%;
+  background: radial-gradient(circle, var(--brand-2) 0%, transparent 68%);
+  opacity: .32;
+  animation: drift 34s var(--ease) infinite reverse;
+}
 
-/* --- Shell ---------------------------------------------------------------- */
-.shell { height: 100vh; display: flex; flex-direction: column; }
+.login-card {
+  position: relative;
+  z-index: 1;
+  width: min(420px, 100%);
+  padding: 34px 32px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(14px) saturate(130%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-3);
+  animation: pop var(--dur-4) var(--ease) both;
+}
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 22px;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 16px;
+}
+.login-brand .logo,
+.topbar .brand .logo {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, var(--brand), var(--brand-2));
+  color: #fff;
+  flex: none;
+}
+.login-card h1 { font-size: 23px; letter-spacing: -.025em; }
+.login-card .sub { margin: 7px 0 22px; color: var(--muted); font-size: 14px; }
+
+/* --- Shell ---------------------------------------------------------------------
+
+   A fixed viewport with three independently scrolling columns. The page
+   itself never scrolls, which is what stops the folder list drifting away
+   while you read a long message.
+------------------------------------------------------------------------------- */
+
+.shell { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
 .topbar {
-  height: var(--header-h); flex: none; background: var(--header); color: #eef1f8;
-  display: flex; align-items: center; gap: 14px; padding: 0 18px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: var(--bar);
+  padding: 0 16px;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--brand) 22%, transparent) 0%, transparent 46%),
+    #0d1020;
+  color: #e9ebf6;
+  border-bottom: 1px solid rgba(255, 255, 255, .08);
 }
-.topbar .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; color: #fff; white-space: nowrap; }
-.topbar .brand .logo { width: 28px; height: 28px; border-radius: 8px; background: var(--accent); display: grid; place-items: center; }
-.topbar .who { text-align: right; line-height: 1.25; font-size: 13.5px; }
-.topbar .who .addr { color: #fff; font-weight: 500; }
-.topbar .who .role { color: #9aa5c4; font-size: 12px; }
+.topbar .brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 15.5px;
+  white-space: nowrap;
+  color: inherit;
+}
+/* Pushed to the right, so the bar is not all bunched against the brand with
+   dead space beside it. */
+.topbar .who { margin-left: auto; text-align: right; line-height: 1.25; }
+.topbar .who .addr { font-size: 13.5px; font-weight: 550; }
+.topbar .who .role { font-size: 11.5px; color: rgba(233, 235, 246, .6); }
 
-.searchbox { flex: 1; max-width: 460px; position: relative; }
-.topbar .searchbox input[type=search] {
-  width: 100%; padding: 8px 12px 8px 36px; border-radius: 999px;
-  border: 1px solid transparent; background: var(--header-soft); color: #fff; font: inherit; font-size: 14px;
-  -webkit-appearance: none; appearance: none;
+.topbar .btn {
+  --btn-bg: rgba(255, 255, 255, .08);
+  --btn-fg: #e9ebf6;
+  --btn-bd: rgba(255, 255, 255, .14);
+  box-shadow: none;
 }
-.topbar .searchbox input[type=search]::placeholder { color: #8e99b8; }
-.topbar .searchbox input[type=search]:focus {
-  outline: none; background: #2c3a63; border-color: #3d4d7a; box-shadow: none;
+.topbar .btn:hover:not(:disabled) { --btn-bg: rgba(255, 255, 255, .16); box-shadow: none; }
+.topbar .icon-btn { color: #e9ebf6; }
+.topbar .icon-btn:hover { background: rgba(255, 255, 255, .12); }
+
+/* Search sits on the dark bar, so it needs its own colours. Scoped to the
+   bar rather than styling every search field in the app. */
+.searchbox { flex: 1; max-width: 480px; position: relative; }
+.topbar .searchbox input[type='search'] {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 12px 7px 36px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, .08);
+  color: #e9ebf6;
+  font-size: 14px;
+  transition: background-color var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease), box-shadow var(--dur-2) var(--ease);
 }
-.searchbox input[type=search]::-webkit-search-cancel-button { filter: invert(1) opacity(.6); }
-.searchbox svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: #8e99b8; }
+.topbar .searchbox input[type='search']::placeholder { color: rgba(233, 235, 246, .5); }
+.topbar .searchbox input[type='search']:focus {
+  background: rgba(255, 255, 255, .14);
+  border-color: var(--brand-2);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-2) 30%, transparent);
+  outline: none;
+}
+.searchbox svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: rgba(233, 235, 246, .55); pointer-events: none; }
+.searchbox input[type='search']::-webkit-search-cancel-button { filter: invert(1) opacity(.6); }
 
 .body { flex: 1; display: flex; min-height: 0; }
 
-/* --- Folders -------------------------------------------------------------- */
-.sidebar {
-  width: var(--sidebar-w); flex: none; background: var(--surface);
-  border-right: 1px solid var(--border); padding: 14px 10px; overflow-y: auto;
-}
-.compose-btn { width: 100%; margin-bottom: 14px; }
-.folder {
-  display: flex; align-items: center; gap: 10px; width: 100%;
-  padding: 8px 11px; margin-bottom: 2px; border: 0; background: none;
-  border-radius: var(--radius-sm); font: inherit; font-size: 14.5px;
-  color: var(--text); cursor: pointer; text-align: left;
-}
-.folder:hover { background: #f2f4f8; }
-.folder.active { background: var(--accent-soft); color: var(--accent); font-weight: 500; }
-.folder .ico { flex: none; opacity: .85; display: grid; place-items: center; }
-.folder .count {
-  margin-left: auto; font-size: 12px; font-weight: 600;
-  background: var(--accent); color: #fff; border-radius: 999px; padding: 1px 7px;
-}
-.folder.active .count { background: var(--accent); }
+/* --- Folders ----------------------------------------------------------------------- */
 
-/* --- Message list --------------------------------------------------------- */
-.list {
-  width: var(--list-w); flex: none; background: var(--surface);
-  border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0;
+.sidebar {
+  flex: none;
+  width: var(--rail);
+  padding: 14px 12px;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  overflow-y: auto;
 }
+.compose-btn { width: 100%; margin-bottom: 16px; }
+
+.folder {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  margin-bottom: 2px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 14.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-2) var(--ease), color var(--dur-2) var(--ease);
+}
+.folder .ico { display: grid; place-items: center; width: 20px; flex: none; color: var(--muted); transition: color var(--dur-2) var(--ease); }
+.folder:hover { background: var(--surface-3); color: var(--ink); }
+.folder:hover .ico { color: var(--ink-2); }
+
+.folder.active { background: var(--brand-soft); color: var(--brand); font-weight: 600; }
+.folder.active .ico { color: var(--brand); }
+
+.folder .count {
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  color: var(--ink-2);
+  font-size: 11.5px;
+  font-weight: 620;
+  font-variant-numeric: tabular-nums;
+}
+.folder.active .count { background: var(--brand); color: var(--brand-ink); }
+
+/* --- The list ------------------------------------------------------------------------ */
+
+.list {
+  flex: none;
+  width: var(--list);
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  min-height: 0;
+}
+
 .list-head {
-  flex: none; padding: 13px 16px; border-bottom: 1px solid var(--border);
-  display: flex; align-items: center; gap: 10px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 13.5px;
 }
 .list-scroll { flex: 1; overflow-y: auto; min-height: 0; }
-.list-foot:not(:empty) {
-  flex: none; padding: 10px 14px; border-top: 1px solid var(--border);
-  display: flex; align-items: center; gap: 10px;
-}
+.list-foot:not(:empty) { flex: none; padding: 11px 16px; border-top: 1px solid var(--border); background: var(--surface-2); }
 
 .msg {
-  display: flex; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border);
-  cursor: pointer; background: none; border-left: 3px solid transparent; width: 100%;
-  text-align: left; font: inherit;
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  width: 100%;
+  padding: 12px 16px;
+  border: 0;
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease);
+  animation: fade var(--dur-2) var(--ease) both;
 }
-.msg:hover { background: #fafbfd; }
-.msg.unread { border-left-color: var(--accent); background: #fbfcff; }
-.msg.unread .from, .msg.unread .subject { font-weight: 600; }
-.msg.selected { background: var(--accent-soft); }
+.msg:hover { background: var(--surface-2); }
+
+/* Unread is carried by weight and a bar, not by colour alone — a colour
+   difference this small is the first thing to disappear on a bad screen. */
+.msg.unread { border-left-color: var(--brand); background: var(--brand-softer); }
+.msg.unread .from, .msg.unread .subject { font-weight: 640; }
+
+.msg.selected { background: var(--brand-soft); border-left-color: var(--brand); }
+
 .msg .from { font-size: 14px; }
-.msg .subject { font-size: 13.5px; color: var(--text); margin-top: 1px; }
-.msg .preview { font-size: 12.5px; color: var(--text-muted); margin-top: 2px; }
-.msg .meta { flex: none; text-align: right; font-size: 12px; color: var(--text-muted); }
+.msg .subject { margin-top: 1px; font-size: 13.5px; color: var(--ink); }
+.msg .preview { margin-top: 3px; font-size: 12.5px; color: var(--muted); }
+.msg .meta { flex: none; text-align: right; font-size: 11.5px; color: var(--muted); }
+
 .msg .star {
-  background: none; border: 0; cursor: pointer; padding: 0; color: var(--border-strong);
-  align-self: flex-start; margin-top: 1px;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--border-strong);
+  transition: color var(--dur-2) var(--ease), transform var(--dur-2) var(--ease-pop);
 }
+.msg .star:hover { color: var(--star); transform: scale(1.18); }
 .msg .star.on { color: var(--star); }
-.msg .clip { color: var(--text-muted); }
+.msg .clip { color: var(--muted); }
 
-/* --- Reader --------------------------------------------------------------- */
-.reader { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--surface); }
-.reader-head { flex: none; padding: 18px 22px; border-bottom: 1px solid var(--border); }
-.reader-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
-.reader-body { flex: 1; overflow-y: auto; padding: 0; min-height: 0; }
+/* --- The reader ----------------------------------------------------------------------- */
+
+.reader {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+}
+.reader-head {
+  flex: none;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--border);
+  animation: fade var(--dur-2) var(--ease) both;
+}
+.reader-head .subject { font-family: var(--font-display); font-size: 19px; font-weight: 620; letter-spacing: -.02em; }
+.reader-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 13px; }
+.reader-body { flex: 1; overflow-y: auto; min-height: 0; animation: fade var(--dur-3) var(--ease) both; }
+
+/* Someone else's HTML, in its own document. Sandboxed by the markup; white
+   here whatever the theme, because an email designed for a white background
+   and shown on a dark one is unreadable. */
 .mail-frame { width: 100%; height: 100%; min-height: 420px; border: 0; background: #fff; }
+
 .mail-text {
-  margin: 0; padding: 20px 22px; white-space: pre-wrap; word-break: break-word;
-  font-family: var(--font); font-size: 14.5px; line-height: 1.65;
-}
-.attachments {
-  padding: 14px 22px; border-bottom: 1px solid var(--border);
-  display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
-}
-
-.empty { display: grid; place-items: center; height: 100%; text-align: center; color: var(--text-muted); padding: 40px; }
-.empty .big { opacity: .5; margin-bottom: 10px; }
-
-/* --- Controls ------------------------------------------------------------- */
-.btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-  padding: 8px 15px; border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
-  font: inherit; font-size: 14px; font-weight: 500; cursor: pointer; white-space: nowrap;
-  transition: background .12s ease, border-color .12s ease;
-}
-.btn:hover:not(:disabled) { background: #f7f8fb; }
-.btn:disabled { opacity: .55; cursor: not-allowed; }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
-.btn.danger { color: var(--danger); border-color: #f0c4c1; }
-.btn.danger:hover:not(:disabled) { background: var(--danger-soft); }
-.btn.ghost { border-color: transparent; background: transparent; }
-.btn.ghost:hover:not(:disabled) { background: #f2f4f8; }
-.btn.sm { padding: 5px 11px; font-size: 13px; }
-.btn.block { width: 100%; }
-
-.field { margin-bottom: 15px; }
-.field label { display: block; font-size: 13.5px; font-weight: 500; margin-bottom: 6px; }
-.field .hint { font-size: 12.5px; color: var(--text-muted); margin-top: 5px; }
-input[type=text], input[type=email], input[type=password], input[type=search], select, textarea {
-  width: 100%; padding: 9px 11px; border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm); font: inherit; font-size: 14px; background: var(--surface); color: var(--text);
-}
-textarea { resize: vertical; }
-input:focus, select:focus, textarea:focus {
-  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,70,229,.12);
+  margin: 0;
+  padding: 22px 24px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font);
+  font-size: 14.5px;
+  line-height: 1.65;
 }
 
-.alert { padding: 11px 14px; border-radius: var(--radius-sm); font-size: 13.5px; margin-bottom: 15px; border: 1px solid transparent; }
-.alert.error { background: var(--danger-soft); color: var(--danger); border-color: #f5cecb; }
-.alert.ok { background: var(--ok-soft); color: var(--ok); border-color: #c3e8d8; }
-.alert.info { background: var(--accent-soft); color: var(--accent); border-color: #dbe0fd; }
+.attachments { display: flex; flex-wrap: wrap; gap: 9px; padding: 14px 24px; border-top: 1px solid var(--border); background: var(--surface-2); }
 
+.empty { display: grid; place-items: center; height: 100%; padding: 40px; text-align: center; color: var(--muted); }
+.empty .big {
+  display: grid;
+  place-items: center;
+  width: 60px;
+  height: 60px;
+  margin-bottom: 12px;
+  border-radius: var(--r);
+  background: var(--brand-softer);
+  border: 1px solid var(--brand-line);
+  color: var(--brand);
+}
+
+/* --- Composing --------------------------------------------------------------------------- */
+
+.compose-body { display: grid; gap: 12px; }
 .chip {
-  display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
-  border-radius: 999px; background: #eef1f6; color: #475467; font-size: 12.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 6px 4px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  font-size: 13px;
 }
-.chip button { background: none; border: 0; cursor: pointer; color: inherit; padding: 0; line-height: 1; }
-
-/* --- Modal ---------------------------------------------------------------- */
-.modal-backdrop {
-  position: fixed; inset: 0; z-index: 60; background: rgba(16,24,40,.45);
-  display: grid; place-items: center; padding: 20px;
+.chip button {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  line-height: 1;
+  transition: background-color var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
 }
-.modal {
-  background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-lg);
-  width: 100%; max-width: 560px; max-height: 90vh; display: flex; flex-direction: column;
+.chip button:hover { background: var(--danger-soft); color: var(--danger); }
+
+/* --- Narrow screens -----------------------------------------------------------------------
+
+   Three columns do not fit on a phone, so it becomes two screens: the list,
+   and the message. The back button in the reader is what joins them.
+------------------------------------------------------------------------------------- */
+
+.menu-toggle {
+  display: none;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: rgba(255, 255, 255, .08);
+  color: #e9ebf6;
+  font-size: 17px;
+  cursor: pointer;
 }
-.modal.wide { max-width: 760px; }
-.modal-head { padding: 17px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
-.modal-head h2 { font-size: 16.5px; flex: 1; }
-.modal-body { padding: 20px; overflow-y: auto; }
-.modal-foot { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 9px; align-items: center; }
-.icon-btn { border: 0; background: none; cursor: pointer; font-size: 19px; color: var(--text-muted); line-height: 1; padding: 3px 7px; border-radius: 6px; }
-.icon-btn:hover { background: #f2f4f8; color: var(--text); }
-
-.compose-body { min-height: 260px; font-size: 14.5px; line-height: 1.6; }
-
-/* --- Toasts --------------------------------------------------------------- */
-.toasts { position: fixed; bottom: 20px; right: 20px; z-index: 80; display: flex; flex-direction: column; gap: 9px; max-width: 360px; }
-.toast { background: var(--header); color: #fff; padding: 12px 15px; border-radius: var(--radius-sm); box-shadow: var(--shadow-lg); font-size: 14px; animation: in .16s ease-out; }
-.toast.ok { background: var(--ok); }
-.toast.error { background: var(--danger); }
-@keyframes in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-
-.spinner {
-  display: inline-block; width: 14px; height: 14px; flex: none;
-  border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
-  animation: spin .6s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { * { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
-
-/* --- Responsive ----------------------------------------------------------- */
 .back-to-list { display: none; }
 
-@media (max-width: 1100px) { :root { --list-w: 320px; } }
+@media (max-width: 1100px) {
+  :root { --list: 320px; }
+}
 
-@media (max-width: 880px) {
-  .sidebar { position: fixed; top: var(--header-h); bottom: 0; left: 0; z-index: 20; transform: translateX(-100%); transition: transform .18s ease; box-shadow: var(--shadow-lg); }
+@media (max-width: 860px) {
+  .menu-toggle { display: grid; place-items: center; }
+  .back-to-list { display: inline-flex; }
+
+  .sidebar {
+    position: fixed;
+    top: var(--bar);
+    left: 0;
+    z-index: 50;
+    width: 264px;
+    height: calc(100vh - var(--bar));
+    transform: translateX(-100%);
+    transition: transform var(--dur-3) var(--ease);
+    box-shadow: var(--sh-3);
+  }
   .sidebar.open { transform: none; }
-  .menu-toggle { display: inline-flex !important; }
-  .list { width: 100%; }
-  /* One pane at a time on a phone: the list, or the message. */
+
+  .list { width: 100%; border-right: 0; }
+  /* Reading a message hides the list rather than squeezing it. */
   .body.reading .list { display: none; }
   .body:not(.reading) .reader { display: none; }
-  .back-to-list { display: inline-flex; }
-  .searchbox { max-width: none; }
-  .topbar .who { display: none; }
-}
 
-/* On a phone the wordmark costs the search box more room than it is worth. */
-@media (max-width: 560px) {
-  .topbar { gap: 10px; padding: 0 12px; }
-  .topbar .brand .name { display: none; }
+  .topbar .who { display: none; }
+  .searchbox { max-width: none; }
 }
-.menu-toggle { display: none; background: none; border: 0; color: #fff; font-size: 20px; cursor: pointer; padding: 4px 8px; border-radius: 6px; }
-.menu-toggle:hover { background: var(--header-soft); }

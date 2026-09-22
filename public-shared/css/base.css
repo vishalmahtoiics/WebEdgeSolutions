@@ -1,0 +1,930 @@
+/* ===========================================================================
+   The design language.
+   ===========================================================================
+
+   One file, served at /shared/css/base.css, used by all three front ends: the
+   storefront at /, the portal at /portal and the mail app at /webmail. They
+   are separate applications with separate stylesheets, but they are one
+   product, and a customer who signs in after buying should not feel like they
+   have been handed to somebody else.
+
+   Everything below is either a token, a primitive, or a piece of motion. What
+   each app adds on top is only its own layout.
+
+   Two rules this file keeps to:
+
+     Nothing is loaded from anywhere else. The Content-Security-Policy on this
+     server allows 'self' and nothing more, so the fonts are served from here
+     rather than from a font CDN — which also means no third party is told who
+     is reading your invoices.
+
+     Motion is a layer, never a requirement. Every animation is an entrance or
+     a response to something a person did, nothing loops in the corner of the
+     eye forever, and the whole system switches itself off for anyone who has
+     asked their computer for less movement.
+   =========================================================================== */
+
+/* --- Typeface --------------------------------------------------------------
+
+   Two variable fonts, subset to Latin plus the punctuation and symbols this
+   product actually prints — the rupee sign, the arrows, the tick. 99 KB for
+   the pair, against 345 KB for the unsubset Inter alone.
+
+   Space Grotesk carries the headings because it has a face: slightly squared
+   terminals and a tall x-height that reads as engineered rather than generic.
+   Inter carries everything else because it is the best screen text there is
+   and it has proper tabular figures, which a table of money needs.
+--------------------------------------------------------------------------- */
+
+@font-face {
+  font-family: 'InterVar';
+  src: url('../fonts/inter.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  /* Text stays readable in the fallback face while this loads, rather than
+     the page sitting blank. */
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'GroteskVar';
+  src: url('../fonts/grotesk.woff2') format('woff2');
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* --- Tokens ---------------------------------------------------------------- */
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces, from furthest back to nearest front. */
+  --bg: #f4f5fa;
+  --bg-tint: #eef0f9;
+  --surface: #ffffff;
+  --surface-2: #f7f8fc;
+  --surface-3: #eef0f7;
+  --surface-inset: #f1f3f9;
+
+  /* Ink. */
+  --ink: #101426;
+  --ink-2: #3d4560;
+  --muted: #6b7490;
+  --ink-invert: #f2f4fb;
+
+  --border: #e3e6f0;
+  --border-strong: #ccd2e2;
+
+  /* The brand. Violet rather than the usual dashboard indigo, with a warmer
+     second stop so gradients move rather than sit. */
+  --brand: #6d4aff;
+  --brand-2: #a855f7;
+  --brand-3: #4f3bd6;
+  --brand-ink: #ffffff;
+  --brand-soft: #efeaff;
+  --brand-softer: #f7f4ff;
+  --brand-line: #dcd2ff;
+
+  /* Signals. Teal for health, because on a hosting portal "green" mostly
+     means "up". */
+  --ok: #067a63;
+  --ok-soft: #e2f7f1;
+  --ok-line: #b6e8dc;
+  --warn: #9a5b00;
+  --warn-soft: #fdf1df;
+  --warn-line: #f6ddb4;
+  --danger: #c32b3f;
+  --danger-soft: #fdecef;
+  --danger-line: #f6ccd4;
+  --info: #1d5fd0;
+  --info-soft: #e8f0fe;
+  --info-line: #c3d8fa;
+
+  --ring: color-mix(in srgb, var(--brand) 45%, transparent);
+
+  /* Shape. */
+  --r-xs: 7px;
+  --r-sm: 10px;
+  --r: 14px;
+  --r-lg: 20px;
+  --r-pill: 999px;
+
+  /* Depth. Two soft layers rather than one hard one, so a card looks lifted
+     instead of outlined. */
+  --sh-1: 0 1px 2px rgba(16, 19, 41, .05), 0 1px 3px rgba(16, 19, 41, .04);
+  --sh-2: 0 2px 4px rgba(16, 19, 41, .05), 0 8px 20px -6px rgba(16, 19, 41, .10);
+  --sh-3: 0 4px 8px rgba(16, 19, 41, .06), 0 20px 45px -10px rgba(16, 19, 41, .18);
+  --sh-brand: 0 6px 18px -6px color-mix(in srgb, var(--brand) 55%, transparent);
+
+  /* Motion. */
+  --dur-1: 110ms;
+  --dur-2: 190ms;
+  --dur-3: 320ms;
+  --dur-4: 560ms;
+  /* A decelerating curve with no overshoot: things arrive and settle. */
+  --ease: cubic-bezier(.22, 1, .36, 1);
+  /* A small overshoot, for things that should feel physical — a toggle
+     landing, a toast arriving. Used sparingly. */
+  --ease-pop: cubic-bezier(.34, 1.42, .64, 1);
+
+  --font: 'InterVar', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-display: 'GroteskVar', 'InterVar', system-ui, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+/* --- Dark ------------------------------------------------------------------
+
+   A real theme, not an inversion. The surfaces are a deep blue-black rather
+   than grey, the borders lift instead of darkening, and the brand is lightened
+   so it still carries on a dark field — the daytime violet goes muddy there.
+--------------------------------------------------------------------------- */
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #0a0c16;
+  --bg-tint: #0e1120;
+  --surface: #121524;
+  --surface-2: #171b2d;
+  --surface-3: #1d2237;
+  --surface-inset: #161a2b;
+
+  --ink: #eef0f8;
+  --ink-2: #b9c0d6;
+  --muted: #8a93ad;
+  --ink-invert: #0a0c16;
+
+  --border: #242a41;
+  --border-strong: #333a57;
+
+  --brand: #8f75ff;
+  --brand-2: #c084fc;
+  --brand-3: #7c5cff;
+  --brand-ink: #0a0c16;
+  --brand-soft: #1e1b3a;
+  --brand-softer: #17162c;
+  --brand-line: #342c63;
+
+  --ok: #3ddcb4;
+  --ok-soft: #10281f;
+  --ok-line: #1d4a3b;
+  --warn: #f5b657;
+  --warn-soft: #2a1f0d;
+  --warn-line: #4d3a15;
+  --danger: #ff7a8f;
+  --danger-soft: #2c1219;
+  --danger-line: #52222e;
+  --info: #7fb0ff;
+  --info-soft: #101c33;
+  --info-line: #23385f;
+
+  --sh-1: 0 1px 2px rgba(0, 0, 0, .5);
+  --sh-2: 0 2px 6px rgba(0, 0, 0, .45), 0 10px 26px -8px rgba(0, 0, 0, .6);
+  --sh-3: 0 6px 14px rgba(0, 0, 0, .5), 0 26px 60px -14px rgba(0, 0, 0, .75);
+}
+
+/* Follows the operating system until somebody chooses for themselves. The
+   guard is what makes an explicit light choice stick on a dark machine. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+
+    --bg: #0a0c16;
+    --bg-tint: #0e1120;
+    --surface: #121524;
+    --surface-2: #171b2d;
+    --surface-3: #1d2237;
+    --surface-inset: #161a2b;
+
+    --ink: #eef0f8;
+    --ink-2: #b9c0d6;
+    --muted: #8a93ad;
+    --ink-invert: #0a0c16;
+
+    --border: #242a41;
+    --border-strong: #333a57;
+
+    --brand: #8f75ff;
+    --brand-2: #c084fc;
+    --brand-3: #7c5cff;
+    --brand-ink: #0a0c16;
+    --brand-soft: #1e1b3a;
+    --brand-softer: #17162c;
+    --brand-line: #342c63;
+
+    --ok: #3ddcb4;
+    --ok-soft: #10281f;
+    --ok-line: #1d4a3b;
+    --warn: #f5b657;
+    --warn-soft: #2a1f0d;
+    --warn-line: #4d3a15;
+    --danger: #ff7a8f;
+    --danger-soft: #2c1219;
+    --danger-line: #52222e;
+    --info: #7fb0ff;
+    --info-soft: #101c33;
+    --info-line: #23385f;
+
+    --sh-1: 0 1px 2px rgba(0, 0, 0, .5);
+    --sh-2: 0 2px 6px rgba(0, 0, 0, .45), 0 10px 26px -8px rgba(0, 0, 0, .6);
+    --sh-3: 0 6px 14px rgba(0, 0, 0, .5), 0 26px 60px -14px rgba(0, 0, 0, .75);
+  }
+}
+
+/* --- Reset ----------------------------------------------------------------- */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.55;
+  font-feature-settings: 'cv05' 1, 'ss03' 1;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -.02em;
+}
+
+a { color: var(--brand); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Money and counts line up in a column only if the digits are the same width.
+   Inter has tabular figures; this is where they get used. */
+.tnum, table td, table th, .mono { font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--mono); font-size: .92em; }
+
+::selection { background: color-mix(in srgb, var(--brand) 28%, transparent); }
+
+/* One focus ring everywhere, and only for keyboard users. */
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: var(--r-xs);
+}
+
+/* --- Motion ----------------------------------------------------------------
+
+   The whole system in one place, so "turn the animation off" is one rule
+   rather than a hunt through three stylesheets.
+--------------------------------------------------------------------------- */
+
+@keyframes rise {
+  from { opacity: 0; transform: translate3d(0, 14px, 0); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes pop {
+  from { opacity: 0; transform: scale(.94); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translate3d(24px, 0, 0); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* The drifting light behind a hero or a sign-in screen. Slow enough to be
+   noticed only if you look for it. */
+@keyframes drift {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  33%  { transform: translate3d(4%, -3%, 0) scale(1.08); }
+  66%  { transform: translate3d(-3%, 3%, 0) scale(.96); }
+  100% { transform: translate3d(0, 0, 0) scale(1); }
+}
+
+@keyframes shimmer {
+  from { background-position: -160% 0; }
+  to   { background-position: 260% 0; }
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@keyframes sheen {
+  from { transform: translateX(-120%) skewX(-18deg); }
+  to   { transform: translateX(220%) skewX(-18deg); }
+}
+
+/* Entrance helpers. `.stagger` walks its children in one after another; the
+   list stops at twelve because past that a person has started reading rather
+   than watching. */
+.rise { animation: rise var(--dur-4) var(--ease) both; }
+.fade-in { animation: fade var(--dur-3) var(--ease) both; }
+
+.stagger > * { animation: rise var(--dur-4) var(--ease) both; }
+.stagger > *:nth-child(1)  { animation-delay: 20ms; }
+.stagger > *:nth-child(2)  { animation-delay: 60ms; }
+.stagger > *:nth-child(3)  { animation-delay: 100ms; }
+.stagger > *:nth-child(4)  { animation-delay: 140ms; }
+.stagger > *:nth-child(5)  { animation-delay: 180ms; }
+.stagger > *:nth-child(6)  { animation-delay: 220ms; }
+.stagger > *:nth-child(7)  { animation-delay: 260ms; }
+.stagger > *:nth-child(8)  { animation-delay: 300ms; }
+.stagger > *:nth-child(9)  { animation-delay: 340ms; }
+.stagger > *:nth-child(10) { animation-delay: 380ms; }
+.stagger > *:nth-child(11) { animation-delay: 420ms; }
+.stagger > *:nth-child(n+12) { animation-delay: 460ms; }
+
+/* Asked for, and obeyed. Not reduced — off. Someone who sets this often does
+   so because movement makes them ill. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+    transition-duration: .01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ===========================================================================
+   Primitives
+   =========================================================================== */
+
+/* --- Buttons ---------------------------------------------------------------
+
+   Three levels and three tones. The primary button is the only gradient in
+   the system, which is what makes it read as the primary button without
+   needing to be bigger or louder than everything near it.
+--------------------------------------------------------------------------- */
+
+.btn {
+  --btn-bg: var(--surface);
+  --btn-fg: var(--ink);
+  --btn-bd: var(--border-strong);
+
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 16px;
+  min-height: 38px;
+  border: 1px solid var(--btn-bd);
+  border-radius: var(--r-sm);
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  font: inherit;
+  font-weight: 550;
+  font-size: 14.5px;
+  line-height: 1.2;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  box-shadow: var(--sh-1);
+  transition:
+    transform var(--dur-1) var(--ease),
+    box-shadow var(--dur-2) var(--ease),
+    background-color var(--dur-2) var(--ease),
+    border-color var(--dur-2) var(--ease),
+    color var(--dur-2) var(--ease);
+}
+
+.btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: var(--sh-2);
+  border-color: var(--border-strong);
+}
+
+/* Pressing moves the button under the finger rather than after it. */
+.btn:active:not(:disabled) {
+  transform: translateY(0) scale(.985);
+  box-shadow: var(--sh-1);
+  transition-duration: 60ms;
+}
+
+.btn:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
+
+.btn svg { flex: none; }
+
+.btn.primary {
+  --btn-fg: var(--brand-ink);
+  --btn-bd: transparent;
+  background: linear-gradient(135deg, var(--brand) 0%, var(--brand-2) 100%);
+  box-shadow: var(--sh-brand);
+}
+.btn.primary:hover:not(:disabled) { box-shadow: 0 10px 24px -6px color-mix(in srgb, var(--brand) 65%, transparent); }
+
+/* A light travels across the primary button on hover. Once, quickly — it
+   points at the button rather than performing. */
+.btn.primary::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .38), transparent);
+  width: 45%;
+  transform: translateX(-120%) skewX(-18deg);
+  opacity: 0;
+  pointer-events: none;
+}
+.btn.primary:hover:not(:disabled)::after {
+  opacity: 1;
+  animation: sheen 620ms var(--ease);
+}
+
+.btn.ghost { --btn-bg: transparent; --btn-bd: transparent; box-shadow: none; }
+.btn.ghost:hover:not(:disabled) { --btn-bg: var(--surface-3); box-shadow: none; }
+
+.btn.danger { --btn-fg: var(--danger); --btn-bd: var(--danger-line); }
+.btn.danger:hover:not(:disabled) { --btn-bg: var(--danger-soft); }
+
+.btn.solid-danger {
+  --btn-fg: #fff;
+  --btn-bd: transparent;
+  background: linear-gradient(135deg, #e0435a, var(--danger));
+}
+
+.btn.sm { padding: 5px 11px; min-height: 30px; font-size: 13.5px; border-radius: var(--r-xs); gap: 6px; }
+.btn.lg { padding: 13px 24px; min-height: 48px; font-size: 16px; border-radius: var(--r); }
+.btn.block { width: 100%; }
+
+/* A button that is waiting on the network. The spinner replaces the label so
+   the width does not jump. */
+.btn.is-busy { color: transparent !important; pointer-events: none; }
+.btn.is-busy::before {
+  content: '';
+  position: absolute;
+  width: 15px;
+  height: 15px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  color: var(--btn-fg);
+  animation: spin 620ms linear infinite;
+}
+.btn.primary.is-busy::before { color: var(--brand-ink); }
+
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 18px;
+  cursor: pointer;
+  transition: background-color var(--dur-2) var(--ease), transform var(--dur-1) var(--ease);
+}
+.icon-btn:hover { background: var(--surface-3); }
+.icon-btn:active { transform: scale(.92); }
+
+/* --- Cards ------------------------------------------------------------------ */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  box-shadow: var(--sh-1);
+  overflow: hidden;
+  transition: box-shadow var(--dur-3) var(--ease), border-color var(--dur-3) var(--ease);
+}
+
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 17px 20px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
+}
+.card-head h2 { font-size: 16.5px; }
+.card-head p { margin: 4px 0 0; color: var(--muted); font-size: 13.5px; }
+
+.card-body { padding: 20px; }
+.card-body.tight { padding: 0; }
+
+/* Something you can click into. The lift is small on purpose: a card that
+   jumps is a card that feels unstable. */
+.card.interactive { cursor: pointer; }
+.card.interactive:hover {
+  border-color: var(--brand-line);
+  box-shadow: var(--sh-2);
+  transform: translateY(-2px);
+}
+.card.interactive { transition: box-shadow var(--dur-3) var(--ease), border-color var(--dur-3) var(--ease), transform var(--dur-3) var(--ease); }
+
+/* --- Forms ------------------------------------------------------------------ */
+
+.field { margin-bottom: 15px; }
+.field > label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 560;
+  color: var(--ink-2);
+  letter-spacing: .005em;
+}
+.field .hint { margin-top: 6px; font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+
+input[type='text'], input[type='email'], input[type='password'], input[type='number'],
+input[type='search'], input[type='date'], input[type='url'], input[type='tel'],
+select, textarea {
+  width: 100%;
+  padding: 9px 12px;
+  min-height: 40px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14.5px;
+  transition: border-color var(--dur-2) var(--ease), box-shadow var(--dur-2) var(--ease), background-color var(--dur-2) var(--ease);
+}
+textarea { min-height: 84px; resize: vertical; line-height: 1.55; }
+
+input:hover:not(:disabled), select:hover:not(:disabled), textarea:hover:not(:disabled) {
+  border-color: var(--muted);
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3.5px var(--ring);
+}
+
+input:disabled, select:disabled, textarea:disabled {
+  background: var(--surface-inset);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
+
+select {
+  appearance: none;
+  padding-right: 34px;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+                    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 17px) 54%, calc(100% - 12px) 54%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+/* Checkboxes and radios, restyled so they match the rest rather than looking
+   like they came from somewhere else. */
+input[type='checkbox'], input[type='radio'] {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  flex: none;
+  margin: 0;
+  padding: 0;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  cursor: pointer;
+  display: inline-grid;
+  place-content: center;
+  transition: background-color var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease);
+}
+input[type='radio'] { border-radius: 50%; }
+
+input[type='checkbox']::after {
+  content: '';
+  width: 10px;
+  height: 10px;
+  transform: scale(0);
+  transform-origin: center;
+  background: var(--brand-ink);
+  clip-path: polygon(14% 45%, 0 60%, 39% 100%, 100% 22%, 85% 7%, 37% 68%);
+  transition: transform var(--dur-2) var(--ease-pop);
+}
+input[type='radio']::after {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--brand-ink);
+  transform: scale(0);
+  transition: transform var(--dur-2) var(--ease-pop);
+}
+
+input[type='checkbox']:checked, input[type='radio']:checked {
+  background: linear-gradient(135deg, var(--brand), var(--brand-2));
+  border-color: transparent;
+}
+input[type='checkbox']:checked::after, input[type='radio']:checked::after { transform: scale(1); }
+
+label.check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 14.5px;
+}
+label.check input { margin-top: 1px; }
+
+/* --- Badges ----------------------------------------------------------------- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2.5px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 560;
+  letter-spacing: .01em;
+  white-space: nowrap;
+}
+.badge.ok     { background: var(--ok-soft);     color: var(--ok);     border-color: var(--ok-line); }
+.badge.warn   { background: var(--warn-soft);   color: var(--warn);   border-color: var(--warn-line); }
+.badge.danger { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-line); }
+.badge.accent { background: var(--brand-soft);  color: var(--brand);  border-color: var(--brand-line); }
+.badge.info   { background: var(--info-soft);   color: var(--info);   border-color: var(--info-line); }
+
+/* A live dot, for a status that is true right now. */
+.badge.live::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 0 currentColor;
+  animation: pulse-dot 2.4s var(--ease) infinite;
+}
+@keyframes pulse-dot {
+  0%      { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 55%, transparent); }
+  70%     { box-shadow: 0 0 0 6px transparent; }
+  100%    { box-shadow: 0 0 0 0 transparent; }
+}
+
+/* --- Alerts ----------------------------------------------------------------- */
+
+.alert {
+  display: block;
+  padding: 12px 15px;
+  margin-bottom: 15px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--muted);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-size: 14px;
+  line-height: 1.55;
+  animation: rise var(--dur-3) var(--ease) both;
+}
+.alert.ok     { background: var(--ok-soft);     color: var(--ok);     border-color: var(--ok-line);     border-left-color: var(--ok); }
+.alert.warn   { background: var(--warn-soft);   color: var(--warn);   border-color: var(--warn-line);   border-left-color: var(--warn); }
+.alert.error,
+.alert.danger { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-line); border-left-color: var(--danger); }
+.alert.info   { background: var(--info-soft);   color: var(--info);   border-color: var(--info-line);   border-left-color: var(--info); }
+.alert .strong { font-weight: 650; }
+
+/* --- Tables ----------------------------------------------------------------- */
+
+table { width: 100%; border-collapse: collapse; }
+
+thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 10px 16px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  font-size: 11.5px;
+  font-weight: 620;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+tbody td {
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  vertical-align: middle;
+}
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr { transition: background-color var(--dur-1) var(--ease); }
+tbody tr:hover { background: var(--surface-2); }
+
+td.right, th.right { text-align: right; }
+.nowrap { white-space: nowrap; }
+
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* --- Loading ----------------------------------------------------------------
+
+   A shape where the content will be, rather than the word "Loading". It tells
+   you what is coming and stops the page jumping when it arrives.
+--------------------------------------------------------------------------- */
+
+.skeleton {
+  border-radius: var(--r-sm);
+  background: linear-gradient(
+    90deg,
+    var(--surface-3) 0%,
+    var(--surface-2) 40%,
+    var(--surface-3) 70%
+  );
+  background-size: 260% 100%;
+  animation: shimmer 1.5s linear infinite;
+}
+.skeleton.line { height: 12px; margin-bottom: 9px; }
+.skeleton.line.short { width: 42%; }
+.skeleton.line.mid { width: 68%; }
+.skeleton.block { height: 92px; }
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: spin 620ms linear infinite;
+}
+
+/* --- Modals ------------------------------------------------------------------ */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: color-mix(in srgb, var(--ink) 45%, transparent);
+  backdrop-filter: blur(6px) saturate(120%);
+  animation: fade var(--dur-2) var(--ease) both;
+  overflow-y: auto;
+}
+
+.modal {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-3);
+  animation: pop var(--dur-3) var(--ease-pop) both;
+  overflow: hidden;
+}
+.modal.wide { width: min(940px, 100%); }
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 17px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-head h2 { flex: 1; font-size: 17px; }
+
+.modal-body { padding: 20px; overflow-y: auto; flex: 1; }
+
+.modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  padding: 15px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+  flex-wrap: wrap;
+}
+
+/* --- Toasts ------------------------------------------------------------------ */
+
+.toasts {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 380px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 14px;
+  box-shadow: var(--sh-3);
+  animation: slide-in-right var(--dur-3) var(--ease-pop) both;
+  pointer-events: auto;
+}
+.toast::before {
+  content: '';
+  width: 3px;
+  align-self: stretch;
+  margin: -12px 2px -12px -16px;
+  background: var(--muted);
+}
+.toast.ok::before { background: var(--ok); }
+.toast.error::before { background: var(--danger); }
+.toast.leaving { animation: fade var(--dur-2) var(--ease) reverse both; }
+
+@media (max-width: 520px) {
+  .toasts { left: 14px; right: 14px; bottom: 14px; }
+  .toast { max-width: none; }
+}
+
+/* --- The drifting light ------------------------------------------------------
+
+   Three blurred blobs behind a hero or a sign-in card. Pure CSS, composited on
+   the GPU, and behind `pointer-events: none` so it can never eat a click.
+--------------------------------------------------------------------------- */
+
+.aurora {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+.aurora::before,
+.aurora::after,
+.aurora > i {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(70px);
+  opacity: .5;
+  will-change: transform;
+}
+.aurora::before {
+  width: 46vw; height: 46vw; min-width: 340px; min-height: 340px;
+  top: -16%; left: -8%;
+  background: radial-gradient(circle, var(--brand) 0%, transparent 68%);
+  animation: drift 26s var(--ease) infinite;
+}
+.aurora::after {
+  width: 40vw; height: 40vw; min-width: 300px; min-height: 300px;
+  top: 6%; right: -10%;
+  background: radial-gradient(circle, var(--brand-2) 0%, transparent 68%);
+  animation: drift 32s var(--ease) infinite reverse;
+}
+.aurora > i {
+  width: 34vw; height: 34vw; min-width: 260px; min-height: 260px;
+  bottom: -20%; left: 32%;
+  background: radial-gradient(circle, var(--ok) 0%, transparent 70%);
+  opacity: .28;
+  animation: drift 38s var(--ease) infinite;
+}
+
+:root[data-theme='dark'] .aurora::before,
+:root[data-theme='dark'] .aurora::after { opacity: .34; }
+
+/* --- Small helpers ----------------------------------------------------------- */
+
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+.tiny { font-size: 12px; }
+.strong { font-weight: 640; }
+.grow { flex: 1; min-width: 0; }
+.center { text-align: center; }
+.break { overflow-wrap: anywhere; }
+.row { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.stack { display: grid; gap: 14px; }
+/* Cards keep their own height rather than stretching to match the tallest
+   one. A short card blown up to match a long one is a lot of empty space
+   with a border around it. */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+.hr { border: 0; border-top: 1px solid var(--border); margin: 20px 0; }
+
+@media (max-width: 760px) {
+  .grid-2, .form-row { grid-template-columns: 1fr; }
+}

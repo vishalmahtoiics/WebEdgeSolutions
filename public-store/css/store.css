@@ -1,253 +1,443 @@
-/* ---------------------------------------------------------------------------
-   The public storefront. Same palette as the portal, laid out as a sales page:
-   wide, generous, and readable on a phone first — most people arriving at a
-   hosting site from a WhatsApp link are on one.
---------------------------------------------------------------------------- */
-:root {
-  --bg: #ffffff;
-  --bg-soft: #f6f8fc;
-  --ink: #17203a;
-  --ink-soft: #46506b;
-  --muted: #6b7590;
+/* ===========================================================================
+   The public storefront.
+   ===========================================================================
 
-  --border: #e4e8ef;
-  --border-strong: #d3d9e3;
+   Tokens, primitives and motion come from /shared/css/base.css, so a customer
+   who buys here and then signs in to the portal is looking at the same
+   product rather than two that were built by different people.
 
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
-  --accent-soft: #eef2ff;
+   What is different here is the job. The portal is a tool somebody uses for
+   an hour; this is a page somebody reads for ninety seconds, usually on a
+   phone, usually arriving from a WhatsApp link. So it is wider, quieter in
+   the chrome and louder in the type, and the three things a visitor came for
+   — what it costs, is my name free, how do I pay — are each one scroll apart.
+   =========================================================================== */
 
-  --ok: #0f7b56;
-  --ok-soft: #e6f6ef;
-  --warn: #9a6400;
-  --warn-soft: #fdf3e2;
-  --danger: #c02626;
-  --danger-soft: #fdeceb;
+:root { --wrap: 1140px; }
 
-  --radius: 14px;
-  --radius-sm: 9px;
-  --shadow: 0 1px 2px rgba(16,24,40,.04), 0 2px 8px rgba(16,24,40,.05);
-  --shadow-lg: 0 18px 50px rgba(16,24,40,.14);
+body { font-size: 16px; line-height: 1.62; }
 
-  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --wrap: 1120px;
-}
-
-* { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
-body {
-  margin: 0; background: var(--bg); color: var(--ink);
-  font-family: var(--font); font-size: 16px; line-height: 1.6;
-  -webkit-font-smoothing: antialiased;
-}
-h1, h2, h3 { margin: 0; letter-spacing: -.02em; line-height: 1.2; font-weight: 700; }
-h1 { font-size: clamp(30px, 5vw, 46px); }
-h2 { font-size: clamp(23px, 3.2vw, 31px); }
-h3 { font-size: 18px; font-weight: 650; }
+h1 { font-size: clamp(32px, 5.2vw, 52px); letter-spacing: -.035em; line-height: 1.06; }
+h2 { font-size: clamp(24px, 3.4vw, 34px); letter-spacing: -.03em; }
+h3 { font-size: 18.5px; font-weight: 620; letter-spacing: -.02em; }
 p { margin: 0; }
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
+
 .booting { display: grid; place-items: center; min-height: 70vh; color: var(--muted); }
+.wrap { width: 100%; max-width: var(--wrap); margin: 0 auto; padding: 0 22px; }
 
-.wrap { width: 100%; max-width: var(--wrap); margin: 0 auto; padding: 0 20px; }
-.muted { color: var(--muted); }
-.small { font-size: 14px; }
-.tiny { font-size: 12.5px; }
-.strong { font-weight: 650; }
-.mono { font-family: var(--mono); }
-.break { overflow-wrap: anywhere; }
-.grow { flex: 1; min-width: 0; }
-.center { text-align: center; }
+/* --- Header ------------------------------------------------------------------
 
-/* --- Header ---------------------------------------------------------------- */
+   Glass rather than a solid bar: the hero's light shows through it as the
+   page moves, which is the cheapest way to make a page feel like it has
+   depth.
+--------------------------------------------------------------------------- */
+
 .site-head {
-  position: sticky; top: 0; z-index: 30;
-  background: rgba(255,255,255,.92); backdrop-filter: blur(10px);
-  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  backdrop-filter: blur(14px) saturate(160%);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
-.site-head .inner { display: flex; align-items: center; gap: 16px; height: 66px; }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17.5px; color: var(--ink); }
+.site-head .inner { display: flex; align-items: center; gap: 14px; height: 70px; }
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  font-family: var(--font-display);
+  font-weight: 620;
+  font-size: 18px;
+  letter-spacing: -.02em;
+  color: var(--ink);
+}
 .brand:hover { text-decoration: none; }
 .brand .logo {
-  width: 34px; height: 34px; border-radius: 10px; background: var(--accent);
-  color: #fff; display: grid; place-items: center; flex: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  background: linear-gradient(135deg, var(--brand), var(--brand-2));
+  color: #fff;
+  box-shadow: 0 6px 16px -4px color-mix(in srgb, var(--brand) 65%, transparent);
+  flex: none;
 }
-.site-nav { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+
+.site-nav { display: flex; align-items: center; gap: 2px; margin-left: auto; }
 .site-nav a, .site-nav button {
-  padding: 8px 13px; border-radius: var(--radius-sm); border: 0; background: none;
-  font: inherit; font-size: 15px; color: var(--ink-soft); cursor: pointer;
-}
-.site-nav a:hover, .site-nav button:hover { background: var(--bg-soft); color: var(--ink); text-decoration: none; }
-
-/* --- Hero ------------------------------------------------------------------ */
-.hero { padding: 64px 0 52px; background: linear-gradient(180deg, var(--accent-soft) 0%, #fff 100%); }
-.hero h1 { max-width: 15em; }
-.hero .lede { font-size: clamp(17px, 2vw, 19.5px); color: var(--ink-soft); margin-top: 16px; max-width: 34em; }
-.hero-actions { display: flex; flex-wrap: wrap; gap: 11px; margin-top: 28px; }
-
-/* --- Sections -------------------------------------------------------------- */
-.section { padding: 62px 0; }
-.section.soft { background: var(--bg-soft); }
-.section-head { max-width: 40em; margin-bottom: 34px; }
-.section-head p { color: var(--ink-soft); margin-top: 10px; }
-
-/* --- Plans ----------------------------------------------------------------- */
-.plans { display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); align-items: start; }
-.plan {
-  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 26px 24px; box-shadow: var(--shadow); display: flex; flex-direction: column; height: 100%;
   position: relative;
+  padding: 8px 13px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 510;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: color var(--dur-2) var(--ease);
 }
-.plan.featured { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), var(--shadow-lg); }
+.site-nav a:hover, .site-nav button:hover { color: var(--ink); text-decoration: none; }
+
+/* The underline grows from the middle out, which reads as one gesture
+   rather than a box switching on. */
+.site-nav a:not(.btn)::after, .site-nav button:not(.btn)::after {
+  content: '';
+  position: absolute;
+  left: 13px;
+  right: 13px;
+  bottom: 4px;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--brand), var(--brand-2));
+  transform: scaleX(0);
+  transition: transform var(--dur-2) var(--ease);
+}
+.site-nav a:not(.btn):hover::after, .site-nav button:not(.btn):hover::after { transform: scaleX(1); }
+
+/* --- Hero ----------------------------------------------------------------------
+
+   The drifting light lives behind this and nothing else on the page. One
+   place where the product shows off; everywhere below it is about being
+   read.
+------------------------------------------------------------------------------- */
+
+.hero {
+  position: relative;
+  padding: 92px 0 78px;
+  overflow: hidden;
+  background: linear-gradient(180deg, var(--brand-softer) 0%, var(--bg) 78%);
+}
+.hero .wrap { position: relative; z-index: 1; }
+
+.hero h1 { max-width: 15.5ch; }
+.hero h1 .accent {
+  background: linear-gradient(115deg, var(--brand) 10%, var(--brand-2) 90%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.hero .lede {
+  margin-top: 20px;
+  max-width: 36em;
+  font-size: clamp(17px, 1.9vw, 20px);
+  color: var(--ink-2);
+}
+.hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
+
+/* The eyebrow above the headline: small, and it earns its place by saying
+   something true rather than "Welcome". */
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  padding: 6px 14px 6px 8px;
+  border: 1px solid var(--brand-line);
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  backdrop-filter: blur(6px);
+  font-size: 13.5px;
+  font-weight: 540;
+  color: var(--ink-2);
+}
+.eyebrow .dot {
+  width: 7px;
+  height: 7px;
+  margin-left: 5px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 0 var(--ok);
+  animation: pulse-dot 2.4s var(--ease) infinite;
+}
+
+/* The row of promises under the hero buttons. Text, not badges: a row of
+   coloured pills reads as decoration and gets skipped. */
+.trust { display: flex; flex-wrap: wrap; gap: 8px 26px; margin-top: 34px; }
+.trust span { display: flex; align-items: center; gap: 8px; font-size: 14.5px; color: var(--muted); }
+.trust svg { color: var(--ok); flex: none; }
+
+/* --- Sections -------------------------------------------------------------------- */
+
+.section { padding: 76px 0; }
+.section.soft { background: var(--bg-tint); }
+.section-head { max-width: 42em; margin-bottom: 38px; }
+.section-head p { color: var(--ink-2); margin-top: 12px; font-size: 17px; }
+
+/* --- Plans ------------------------------------------------------------------------ */
+
+.plans {
+  display: grid;
+  gap: 22px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  align-items: stretch;
+}
+
+.plan {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 28px 26px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--sh-1);
+  transition: transform var(--dur-3) var(--ease), box-shadow var(--dur-3) var(--ease), border-color var(--dur-3) var(--ease);
+}
+.plan:hover { transform: translateY(-4px); box-shadow: var(--sh-3); border-color: var(--brand-line); }
+
+/* The featured plan sits forward of the others rather than merely being
+   outlined, so the recommendation is legible before anyone reads a word. */
+.plan.featured {
+  border-color: transparent;
+  box-shadow: var(--sh-2), 0 0 0 2px var(--brand);
+}
+.plan.featured::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, var(--brand), var(--brand-2));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
 .plan .flag {
-  position: absolute; top: -11px; left: 24px;
-  background: var(--accent); color: #fff; font-size: 12px; font-weight: 650;
-  padding: 3px 11px; border-radius: 999px; letter-spacing: .02em;
+  position: absolute;
+  top: -12px;
+  left: 26px;
+  padding: 4px 13px;
+  border-radius: var(--r-pill);
+  background: linear-gradient(135deg, var(--brand), var(--brand-2));
+  color: #fff;
+  font-size: 12px;
+  font-weight: 620;
+  letter-spacing: .03em;
+  box-shadow: 0 6px 14px -4px color-mix(in srgb, var(--brand) 65%, transparent);
 }
-.plan h3 { margin-bottom: 4px; }
+
+.plan h3 { margin-bottom: 5px; }
 .plan .tagline { color: var(--muted); font-size: 14.5px; min-height: 1.6em; }
-.price { display: flex; align-items: baseline; gap: 8px; margin: 18px 0 4px; flex-wrap: wrap; }
-.price .amount { font-size: 34px; font-weight: 700; letter-spacing: -.03em; }
+
+.price { display: flex; align-items: baseline; gap: 9px; margin: 20px 0 4px; flex-wrap: wrap; }
+.price .amount {
+  font-family: var(--font-display);
+  font-size: 38px;
+  font-weight: 650;
+  letter-spacing: -.04em;
+  font-variant-numeric: tabular-nums;
+}
 .price .was { color: var(--muted); text-decoration: line-through; font-size: 17px; }
 .price .per { color: var(--muted); font-size: 14.5px; }
-.features { list-style: none; margin: 20px 0 22px; padding: 0; display: grid; gap: 9px; }
-.features li { display: flex; gap: 9px; font-size: 15px; color: var(--ink-soft); align-items: flex-start; }
+
+.features { list-style: none; margin: 22px 0 24px; padding: 0; display: grid; gap: 10px; }
+.features li { display: flex; gap: 10px; align-items: flex-start; font-size: 15px; color: var(--ink-2); }
 .features li svg { flex: none; color: var(--ok); margin-top: 3px; }
+
 .plan .btn { margin-top: auto; }
 
-/* --- Domain search --------------------------------------------------------- */
+/* --- Domain search ------------------------------------------------------------------ */
+
 .search-card {
-  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
-  box-shadow: var(--shadow); padding: 24px;
+  padding: 26px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--sh-2);
 }
-.search-row { display: flex; gap: 10px; flex-wrap: wrap; }
-.search-row input { flex: 1; min-width: 200px; }
-.tld-results { margin-top: 22px; display: grid; gap: 0; }
-.tld-row {
-  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
-  padding: 14px 2px; border-top: 1px solid var(--border);
+.search-row { display: flex; gap: 11px; flex-wrap: wrap; }
+.search-row input {
+  flex: 1;
+  min-width: 220px;
+  min-height: 52px;
+  padding: 12px 18px;
+  border-radius: var(--r);
+  font-size: 17px;
 }
-.tld-row .name { font-family: var(--mono); font-size: 15.5px; }
-.tld-row .cost { font-weight: 650; }
+.search-row .btn { min-height: 52px; padding-inline: 26px; border-radius: var(--r); }
+
 .tld-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
 .chip {
-  display: inline-flex; align-items: center; gap: 7px; padding: 6px 13px;
-  border-radius: 999px; background: var(--bg-soft); border: 1px solid var(--border);
-  font-size: 14px; color: var(--ink-soft);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  font-size: 13.5px;
+  color: var(--ink-2);
+  transition: border-color var(--dur-2) var(--ease), background-color var(--dur-2) var(--ease), transform var(--dur-1) var(--ease);
 }
-.chip .cost { font-weight: 650; color: var(--ink); }
+.chip:hover { border-color: var(--brand-line); background: var(--brand-softer); transform: translateY(-1px); }
+.chip .cost { font-weight: 620; color: var(--ink); font-variant-numeric: tabular-nums; }
 
-/* --- Badges ---------------------------------------------------------------- */
-.badge {
-  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px;
-  border-radius: 999px; font-size: 12.5px; font-weight: 600; background: var(--bg-soft); color: var(--ink-soft);
+.tld-results { display: grid; gap: 10px; margin-top: 22px; }
+.tld-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 15px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface);
+  flex-wrap: wrap;
+  animation: rise var(--dur-3) var(--ease) both;
+  transition: border-color var(--dur-2) var(--ease), box-shadow var(--dur-2) var(--ease);
 }
-.badge.ok { background: var(--ok-soft); color: var(--ok); }
-.badge.warn { background: var(--warn-soft); color: var(--warn); }
-.badge.danger { background: var(--danger-soft); color: var(--danger); }
-.badge.accent { background: var(--accent-soft); color: var(--accent); }
+.tld-row:hover { border-color: var(--brand-line); box-shadow: var(--sh-1); }
+.tld-row .name { font-family: var(--font-display); font-size: 17px; font-weight: 600; letter-spacing: -.02em; }
+.tld-row .amount { font-weight: 640; font-variant-numeric: tabular-nums; }
 
-/* --- Buttons and fields ---------------------------------------------------- */
-.btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-  padding: 11px 20px; border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong); background: var(--bg); color: var(--ink);
-  font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; white-space: nowrap;
-  transition: background .12s ease, border-color .12s ease, transform .06s ease;
-}
-.btn:hover:not(:disabled) { background: var(--bg-soft); text-decoration: none; }
-.btn:active:not(:disabled) { transform: translateY(1px); }
-.btn:disabled { opacity: .5; cursor: not-allowed; }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
-.btn.ghost { border-color: transparent; background: transparent; }
-.btn.ghost:hover:not(:disabled) { background: var(--bg-soft); }
-.btn.wa { background: #25d366; border-color: #25d366; color: #05331a; }
-.btn.wa:hover:not(:disabled) { background: #1fbe5a; }
-.btn.sm { padding: 7px 13px; font-size: 14px; }
-.btn.block { width: 100%; }
+/* --- Steps, for the "how it works" strip ------------------------------------------- */
 
-.field { margin-bottom: 16px; }
-.field label { display: block; font-size: 14.5px; font-weight: 600; margin-bottom: 6px; }
-.field .hint { font-size: 13px; color: var(--muted); margin-top: 6px; }
-input[type=text], input[type=email], input[type=tel], input[type=search], select, textarea {
-  width: 100%; padding: 11px 13px; border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm); font: inherit; font-size: 15.5px; background: var(--bg); color: var(--ink);
+.steps { display: grid; gap: 22px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); counter-reset: step; }
+.steps > div { counter-increment: step; position: relative; padding-left: 52px; }
+.steps > div::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: -2px;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  background: var(--brand-softer);
+  border: 1px solid var(--brand-line);
+  color: var(--brand);
+  font-family: var(--font-display);
+  font-weight: 650;
+  font-size: 15px;
 }
-textarea { resize: vertical; min-height: 90px; }
-input:focus, select:focus, textarea:focus {
-  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,70,229,.13);
-}
-.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.steps h3 { font-size: 16.5px; margin-bottom: 5px; }
+.steps p { color: var(--muted); font-size: 14.5px; }
 
-.alert { padding: 13px 16px; border-radius: var(--radius-sm); font-size: 14.5px; border: 1px solid transparent; margin-bottom: 16px; }
-.alert.error { background: var(--danger-soft); color: var(--danger); border-color: #f5cecb; }
-.alert.ok { background: var(--ok-soft); color: var(--ok); border-color: #c3e8d8; }
-.alert.info { background: var(--accent-soft); color: var(--accent); border-color: #dbe0fd; }
-.alert.warn { background: var(--warn-soft); color: var(--warn); border-color: #f4e2bf; }
-.alert ul { margin: 8px 0 0; padding-left: 20px; }
+/* --- Paying -------------------------------------------------------------------------- */
 
-/* --- Payment --------------------------------------------------------------- */
-.pay-grid { display: grid; gap: 22px; grid-template-columns: minmax(0, 1fr) 240px; align-items: start; }
-.pay-card { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; box-shadow: var(--shadow); }
-.qr { background: #fff; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; }
-.qr svg { display: block; width: 100%; height: auto; }
-.copy-row { display: flex; align-items: center; gap: 10px; background: var(--bg-soft); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 11px 13px; }
-.copy-row .value { font-family: var(--mono); font-size: 15px; overflow-wrap: anywhere; }
-.steps { counter-reset: step; list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
-.steps li { counter-increment: step; display: flex; gap: 13px; font-size: 15px; color: var(--ink-soft); }
-.steps li::before {
-  content: counter(step); flex: none; width: 25px; height: 25px; border-radius: 50%;
-  background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 13.5px;
-  display: grid; place-items: center; margin-top: 1px;
+.pay-grid { display: grid; gap: 22px; grid-template-columns: 1fr 1fr; align-items: start; }
+.pay-card {
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--sh-1);
 }
+
+.qr {
+  display: block;
+  width: 190px;
+  height: 190px;
+  margin: 0 auto 14px;
+  padding: 10px;
+  border-radius: var(--r);
+  background: #fff;
+  box-shadow: var(--sh-1);
+}
+
 .ref-box {
-  display: inline-block; font-family: var(--mono); font-size: 21px; font-weight: 700; letter-spacing: .04em;
-  background: var(--accent-soft); color: var(--accent); padding: 9px 16px; border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 16px;
+  border: 1px dashed var(--brand-line);
+  border-radius: var(--r);
+  background: var(--brand-softer);
+  font-family: var(--mono);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  color: var(--brand);
+}
+.copy-row { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+
+.amount.big {
+  font-family: var(--font-display);
+  font-size: 32px;
+  font-weight: 650;
+  letter-spacing: -.03em;
+  font-variant-numeric: tabular-nums;
 }
 
-/* --- Footer ---------------------------------------------------------------- */
-.site-foot { border-top: 1px solid var(--border); padding: 34px 0; margin-top: 40px; color: var(--muted); font-size: 14.5px; }
-.site-foot .inner { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; }
+/* --- Footer ---------------------------------------------------------------------------- */
 
-/* --- Floating WhatsApp ----------------------------------------------------- */
+.site-foot {
+  padding: 34px 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg-tint);
+  color: var(--muted);
+  font-size: 14.5px;
+}
+.site-foot .inner { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.site-foot a { color: var(--ink-2); }
+.site-foot a:hover { color: var(--brand); }
+
+/* --- WhatsApp ---------------------------------------------------------------------------
+
+   Fixed to the corner because that is where a customer looks for it, and
+   because on this market it is the channel people actually use.
+------------------------------------------------------------------------------------- */
+
 .wa-float {
-  position: fixed; right: 18px; bottom: 18px; z-index: 40;
-  width: 54px; height: 54px; border-radius: 50%; background: #25d366; color: #05331a;
-  display: grid; place-items: center; box-shadow: var(--shadow-lg); border: 0; cursor: pointer;
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #25d366;
+  color: #fff;
+  box-shadow: 0 8px 24px -6px rgba(37, 211, 102, .6);
+  transition: transform var(--dur-2) var(--ease-pop), box-shadow var(--dur-2) var(--ease);
 }
-.wa-float:hover { text-decoration: none; background: #1fbe5a; }
+.wa-float:hover { transform: scale(1.08); box-shadow: 0 12px 30px -6px rgba(37, 211, 102, .7); text-decoration: none; }
+.wa-float:active { transform: scale(.96); }
 
-/* --- Modal ----------------------------------------------------------------- */
-.modal-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(16,24,40,.5); display: grid; place-items: center; padding: 18px; overflow-y: auto; }
-.modal { background: var(--bg); border-radius: var(--radius); box-shadow: var(--shadow-lg); width: 100%; max-width: 560px; max-height: 92vh; display: flex; flex-direction: column; }
-.modal.wide { max-width: 800px; }
-.modal-head { padding: 19px 22px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
-.modal-head h2 { font-size: 19px; flex: 1; }
-.modal-body { padding: 22px; overflow-y: auto; }
-.modal-foot { padding: 16px 22px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; }
-.icon-btn { border: 0; background: none; cursor: pointer; font-size: 22px; color: var(--muted); line-height: 1; padding: 2px 8px; border-radius: 6px; }
-.icon-btn:hover { background: var(--bg-soft); color: var(--ink); }
+/* A single ring on arrival, so it is noticed once and then left alone. */
+.wa-float::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid #25d366;
+  animation: wa-ring 2.6s var(--ease) 1.4s 3;
+}
+@keyframes wa-ring {
+  0%   { transform: scale(1); opacity: .7; }
+  70%  { transform: scale(1.7); opacity: 0; }
+  100% { transform: scale(1.7); opacity: 0; }
+}
 
-/* --- Toasts ---------------------------------------------------------------- */
-.toasts { position: fixed; bottom: 20px; left: 20px; z-index: 80; display: flex; flex-direction: column; gap: 9px; max-width: 360px; }
-.toast { background: var(--ink); color: #fff; padding: 13px 16px; border-radius: var(--radius-sm); box-shadow: var(--shadow-lg); font-size: 14.5px; animation: rise .16s ease-out; }
-.toast.ok { background: var(--ok); }
-.toast.error { background: var(--danger); }
-@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+/* --- Narrow screens ----------------------------------------------------------------- */
 
-.spinner { display: inline-block; width: 15px; height: 15px; flex: none; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .6s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { * { animation-duration: .01ms !important; transition-duration: .01ms !important; } html { scroll-behavior: auto; } }
-
-/* --- Responsive ------------------------------------------------------------ */
-@media (max-width: 760px) {
+@media (max-width: 860px) {
   .pay-grid { grid-template-columns: 1fr; }
-  .form-row { grid-template-columns: 1fr; }
-  .hero { padding: 44px 0 36px; }
-  .section { padding: 44px 0; }
-  .site-nav a, .site-nav button { padding: 7px 10px; font-size: 14.5px; }
-  .brand span.name { display: none; }
-  .qr { max-width: 240px; }
+}
+
+@media (max-width: 680px) {
+  .hero { padding: 58px 0 52px; }
+  .section { padding: 54px 0; }
+  .site-head .inner { height: 62px; }
+  /* Two of the four nav items are the ones that matter on a phone. */
+  .site-nav a:not(.btn), .site-nav button:not(.btn) { display: none; }
+  .wa-float { right: 15px; bottom: 15px; width: 52px; height: 52px; }
+
+  /* A row of footer links at this width collides with the copyright, because
+     the copyright is told to take the space that is left and there is none. */
+  .site-foot .inner { flex-direction: column; align-items: flex-start; gap: 11px; }
+  .site-foot .grow { flex: none; }
+
+  /* Nothing should sit under the floating button. */
+  .site-foot { padding-bottom: 88px; }
 }

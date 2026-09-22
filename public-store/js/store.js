@@ -96,11 +96,38 @@ function header() {
         el('a', { href: '#/', onclick: () => scrollTo('plans') }, 'Hosting'),
         el('a', { href: '#/', onclick: () => scrollTo('domains') }, 'Domains'),
         el('button', { onclick: openLookup }, 'My order'),
+        themeToggle(),
         // The portal moved under /portal when the storefront took the root.
         el('a', { href: '/portal', class: 'btn sm' }, 'Client login'),
       ),
     ),
   );
+}
+
+/// Light or dark, the same switch the portal has.
+///
+/// The icon shows what pressing it will give you rather than what you have,
+/// which is what somebody reaching for it wants.
+function themeToggle() {
+  const button = el('button', {
+    class: 'icon-btn',
+    title: 'Switch between light and dark',
+    'aria-label': 'Switch between light and dark',
+  });
+
+  const paint = () => {
+    const dark = window.__theme?.current() === 'dark';
+    clear(button).append(icon(dark ? 'sun' : 'moon', 17));
+  };
+
+  button.onclick = () => {
+    window.__theme?.set();
+    paint();
+  };
+
+  paint();
+  window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', paint);
+  return button;
 }
 
 const scrollTo = (id) => {
@@ -146,16 +173,35 @@ function homePage() {
     el(
       'section',
       { class: 'hero' },
+      // The drifting light. An element of its own rather than a background,
+      // because it needs three layers moving at different speeds, and it is
+      // behind pointer-events: none so it can never eat a click.
+      el('div', { class: 'aurora', 'aria-hidden': 'true' }, el('i', {})),
       el(
         'div',
         { class: 'wrap' },
-        el('h1', {}, c.headline),
+        el(
+          'div',
+          { class: 'eyebrow' },
+          el('span', { class: 'dot' }),
+          c.isOpen ? 'Taking orders now' : 'Message us to order',
+        ),
+        // The last two or three words carry the gradient. Any more and it
+        // stops being emphasis.
+        headline(c.headline),
         el('p', { class: 'lede' }, c.subheadline),
         el(
           'div',
           { class: 'hero-actions' },
-          el('a', { class: 'btn primary', href: '#/', onclick: () => scrollTo('plans') }, icon('server', 17), 'See hosting plans'),
-          el('a', { class: 'btn', href: '#/', onclick: () => scrollTo('domains') }, icon('globe', 17), 'Find a domain'),
+          el('a', { class: 'btn primary lg', href: '#/', onclick: () => scrollTo('plans') }, icon('server', 17), 'See hosting plans'),
+          el('a', { class: 'btn lg', href: '#/', onclick: () => scrollTo('domains') }, icon('globe', 17), 'Find a domain'),
+        ),
+        el(
+          'div',
+          { class: 'trust' },
+          el('span', {}, icon('check', 15), 'Free SSL on every plan'),
+          el('span', {}, icon('check', 15), 'Daily backups'),
+          el('span', {}, icon('check', 15), 'A real person answers'),
         ),
         !c.isOpen
           ? el(
@@ -174,6 +220,21 @@ function homePage() {
   return page;
 }
 
+/// The headline, with its last few words carrying the gradient.
+///
+/// Split here rather than asking whoever writes the headline to include
+/// markup: the text is typed into a settings box by a person, and a settings
+/// box that silently accepts HTML is a settings box that will one day be used
+/// to inject some.
+function headline(text) {
+  const words = String(text || '').trim().split(/\s+/);
+  if (words.length < 4) return el('h1', {}, text);
+
+  const tail = words.slice(-2).join(' ');
+  const head = words.slice(0, -2).join(' ');
+  return el('h1', {}, `${head} `, el('span', { class: 'accent' }, tail));
+}
+
 function plansSection() {
   if (!state.plans.length) return null;
 
@@ -189,7 +250,7 @@ function plansSection() {
         el('h2', {}, 'Hosting plans'),
         el('p', {}, 'Pick one. Nothing is charged until you pay, and you can ask us anything first.'),
       ),
-      el('div', { class: 'plans' }, state.plans.map(planCard)),
+      el('div', { class: 'plans stagger' }, state.plans.map(planCard)),
     ),
   );
 }

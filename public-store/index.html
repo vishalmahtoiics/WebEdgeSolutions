@@ -6,6 +6,13 @@
     <title>Hosting and Domains</title>
     <meta name="description" content="Hosting plans and domain registration." />
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9729;</text></svg>" />
+    <!-- Decides light or dark before the first paint, so a dark-mode
+         visitor never sees a white flash. Must not be a module: those
+         are deferred until after parsing. -->
+    <script src="/shared/js/theme.js"></script>
+    <link rel="preload" href="/shared/fonts/inter.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/shared/fonts/grotesk.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/shared/css/base.css" />
     <link rel="stylesheet" href="css/store.css" />
   </head>
   <body>

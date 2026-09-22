@@ -134,6 +134,7 @@ function renderShell() {
       el('span', { class: 'label' }, 'Hosting Portal'),
     ),
     el('div', { class: 'spacer' }),
+    themeToggle(),
     el(
       'div',
       { class: 'topbar-user' },
@@ -149,6 +150,36 @@ function renderShell() {
   );
 
   clear(root).append(el('div', { class: 'shell' }, topbar, sidebar, outlet));
+}
+
+/// Light or dark, remembered per browser.
+///
+/// The icon shows what pressing it will give you, not what you have — a sun
+/// on a dark page means "make it light", which is what somebody reaching for
+/// it is after.
+function themeToggle() {
+  const button = el('button', {
+    class: 'icon-btn',
+    title: 'Switch between light and dark',
+    'aria-label': 'Switch between light and dark',
+  });
+
+  const paint = () => {
+    const dark = window.__theme?.current() === 'dark';
+    clear(button).append(icon(dark ? 'sun' : 'moon', 17));
+  };
+
+  button.onclick = () => {
+    window.__theme?.set();
+    paint();
+  };
+
+  paint();
+  // The operating system can change under us — a machine that switches at
+  // sunset — and the icon should not then be lying.
+  window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', paint);
+
+  return button;
 }
 
 async function signOut() {
@@ -184,7 +215,7 @@ async function renderRoute() {
   markActiveNav(route);
 
   const outlet = document.getElementById('outlet');
-  clear(outlet).append(el('div', { class: 'muted', style: 'padding:40px 0' }, 'Loading…'));
+  clear(outlet).append(loadingSkeleton());
 
   try {
     const view = await VIEWS[route]({ param, user: state.user });
@@ -195,6 +226,34 @@ async function renderRoute() {
     clear(outlet).append(el('div', { class: 'alert error' }, err.message));
   }
 }
+
+/// The shape of a page, while the page is on its way.
+///
+/// A skeleton rather than the word "Loading" for two reasons: it says what is
+/// coming, and it holds the height, so the content does not shove the page
+/// around when it arrives.
+const loadingSkeleton = () =>
+  el(
+    'div',
+    { class: 'fade-in', style: 'padding:6px 0' },
+    el('div', { class: 'skeleton line short', style: 'height:26px;margin-bottom:22px' }),
+    el(
+      'div',
+      { class: 'stat-grid' },
+      ...Array.from({ length: 4 }, () => el('div', { class: 'skeleton block' })),
+    ),
+    el(
+      'div',
+      { class: 'card' },
+      el(
+        'div',
+        { class: 'card-body' },
+        el('div', { class: 'skeleton line mid' }),
+        el('div', { class: 'skeleton line' }),
+        el('div', { class: 'skeleton line short' }),
+      ),
+    ),
+  );
 
 // --- Boot ------------------------------------------------------------------
 

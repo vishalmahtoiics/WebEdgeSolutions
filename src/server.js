@@ -105,6 +105,15 @@ app.use('/api', (_req, res) => res.status(404).json({ error: 'Unknown API endpoi
 // portal sits under /portal, which costs its router nothing: it addresses its
 // own views through the URL hash (#/dashboard), so the path it is served from
 // is not part of its routing at all.
+// One design language, served once. All three apps reference /shared, so the
+// fonts and the token layer are downloaded and cached a single time rather
+// than three times, and there is one file to change when something moves.
+//
+// An absolute path is safe here where it would not be for an app's own assets:
+// this is a server-level mount, so it resolves the same from /, from /portal,
+// from /webmail and from a dedicated mail hostname.
+const sharedDir = path.join(__dirname, '..', 'public-shared');
+
 const storeDir = path.join(__dirname, '..', 'public-store');
 const portalDir = path.join(__dirname, '..', 'public');
 const mailDir = path.join(__dirname, '..', 'public-mail');
@@ -134,6 +143,8 @@ const mountSpa = (base, dir) => {
       : res.redirect(302, `${base}/`),
   );
 };
+
+app.use('/shared', express.static(sharedDir, { maxAge: isProd ? '30d' : 0, immutable: isProd }));
 
 mountSpa('/portal', portalDir);
 mountSpa('/webmail', mailDir);

@@ -859,6 +859,57 @@ the customer and does not change who the ticket is waiting on.
 The ticket is saved before anything is sent, so a mail server that is down
 costs you the notification and never the customer's message.
 
+## How it looks
+
+Three front ends — the storefront, the portal and the mail app — share one
+design language, served once from `/shared`. A customer who buys on the public
+site and then signs in should not feel they have been handed to somebody else.
+
+**Light and dark**, with a switch in the top bar of all three. It follows the
+operating system until somebody chooses for themselves, and the choice is
+remembered per browser. Dark is a real theme rather than an inversion: the
+surfaces are a deep blue-black, the borders lift instead of darkening, and the
+brand colour is lightened because the daytime violet goes muddy on a dark
+field. The theme is decided by a small script in `<head>`, above the
+stylesheet, so a dark-mode visitor never sees a white flash — and it is a
+classic script rather than a module precisely because modules are deferred
+until after parsing, which is exactly too late.
+
+**Two typefaces, self-hosted.** Space Grotesk for headings, because it has a
+face; Inter for everything else, because it is the best screen text there is
+and it has proper tabular figures, which a table of money needs. Both are
+variable fonts subset to Latin plus the punctuation and symbols this product
+actually prints — the rupee sign, the arrows, the tick. 99 KB for the pair,
+against 345 KB for the unsubset Inter alone. They are served from this server
+rather than a font CDN: the Content-Security-Policy here allows `'self'` and
+nothing else, and it also means no third party is told who is reading your
+invoices.
+
+**Motion is a layer, never a requirement.** Everything that moves is either an
+entrance or a response to something a person did. Nothing loops in the corner
+of the eye except the drifting light behind the hero and the sign-in screens,
+which is slow enough to be noticed only if you look for it. Pages rise into
+place, lists arrive one item after another, primary buttons catch a single
+sweep of light on hover, and a button waiting on the network turns into a
+spinner without changing width.
+
+The whole system switches itself off for anyone whose computer asks for less
+movement — off, not reduced, because somebody who sets that preference often
+does so because movement makes them ill:
+
+```css
+@media (prefers-reduced-motion: reduce) { /* every animation and transition */ }
+```
+
+**Loading shows a skeleton**, not the word "Loading". It says what is coming
+and it holds the height, so the content does not shove the page around when it
+arrives.
+
+Everything is built for a phone first, because most people arriving at a
+hosting site from a WhatsApp link are on one. The portal's rail slides over
+the content, the mail app becomes two screens joined by a back button, and the
+invoice line editor stops being a six-column grid and becomes a stack.
+
 ## Roles and access
 
 **Super Admin** manages everything: providers, all domains, users, and resource
@@ -982,6 +1033,10 @@ src/
   routes/              API endpoints
   services/            Provider credentials, sync, store, mail, notifications,
                        scheduler, expiry reminders, two-factor, billing, tickets
+public-shared/         One design language, served at /shared and used by all three
+  css/base.css         Tokens, primitives, motion — light and dark
+  fonts/               Two subset variable fonts, 99 KB for the pair
+  js/theme.js          Picks the theme before the first paint
 public-store/          The public storefront, served at /
   index.html           Shell
   css/store.css        Styles

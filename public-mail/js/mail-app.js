@@ -163,7 +163,8 @@ function renderShell() {
       el('div', { class: 'addr' }, state.account.address),
       el('div', { class: 'role' }, state.account.canSend ? 'Mailbox' : 'Read only'),
     ),
-    el('button', { class: 'menu-toggle', style: 'display:inline-flex', 'aria-label': 'Sign out', onclick: signOut }, icon('logout', 18)),
+    themeToggle(),
+    el('button', { class: 'icon-btn', title: 'Sign out', 'aria-label': 'Sign out', onclick: signOut }, icon('logout', 18)),
   );
 
   dom.sidebar = el('nav', { class: 'sidebar' });
@@ -264,6 +265,29 @@ function openFolder(path) {
 }
 
 const currentFolder = () => state.folders.find((f) => f.path === state.folder) || null;
+
+/// Light or dark, the same switch the portal and the storefront have.
+function themeToggle() {
+  const button = el('button', {
+    class: 'icon-btn',
+    title: 'Switch between light and dark',
+    'aria-label': 'Switch between light and dark',
+  });
+
+  const paint = () => {
+    const dark = window.__theme?.current() === 'dark';
+    clear(button).append(icon(dark ? 'sun' : 'moon', 17));
+  };
+
+  button.onclick = () => {
+    window.__theme?.set();
+    paint();
+  };
+
+  paint();
+  window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', paint);
+  return button;
+}
 
 /// Adjusts a folder's unread badge locally, so reading a message updates the
 /// sidebar without a round trip for every click.

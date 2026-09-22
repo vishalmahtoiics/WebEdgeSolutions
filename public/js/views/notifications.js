@@ -468,7 +468,7 @@ function activityCard(feed) {
     ].map(([value, label]) => el('option', { value }, label)),
   );
 
-  const body = el('div', { class: 'card-body tight table-scroll' });
+  const body = el('div', { class: 'card-body tight table-scroll feed-scroll' });
 
   const draw = (entries) => {
     if (!entries.length) {
