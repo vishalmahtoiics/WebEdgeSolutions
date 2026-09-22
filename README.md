@@ -124,6 +124,7 @@ Point your platform's health check at `/api/health`, which returns
 | `ENCRYPTION_KEY` | yes | 64 hex characters (32 bytes) used to encrypt provider API tokens at rest. Generate with `openssl rand -hex 32`. |
 | `PORT` | no | Defaults to `3000`. |
 | `NOTIFY_BURST_LIMIT` | no | Alerts allowed per ten minutes before the rest are summarised. Defaults to `30`. |
+| `SCHEDULER_TICK_MS` | no | How often the portal checks whether an overnight job is owed. Defaults to five minutes; there is rarely a reason to change it. |
 | `NODE_ENV` | no | Set to `production` when deploying. |
 | `SECURE_COOKIES` | no | Set to `true` when serving over HTTPS. |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NAME` | no | Used to create the first Super Admin on seed/first boot. |
@@ -723,6 +724,141 @@ to 10 per ten minutes, because it sends real mail through somebody's server.
 
 ---
 
+## Overnight jobs
+
+Two things can happen on their own, once a day, and both are off until you
+switch them on under **Alerts & Activity → Overnight jobs**.
+
+**Nightly sync** pulls every provider's domains, DNS records, mailboxes and
+detected technology, so the portal is current in the morning without anyone
+pressing Sync Everything. One provider failing does not stop the others.
+
+**Domain expiry reminders** warn before a domain lapses. You set the ladder —
+`30,15,7,1` by default — and each step sends one email as the domain passes it.
+Optionally the customer assigned to the domain is emailed too, in different
+words: yours says which domain and how long, theirs says what stops working and
+to get in touch.
+
+Three properties are worth knowing, because they are what make this safe to
+leave running:
+
+**It runs once a day, not once a tick.** What decides that is the recorded time
+of the last run, so a container redeployed four times before lunch still syncs
+once.
+
+**It catches up.** A machine that was off at 2am runs the job when it comes
+back rather than skipping a day in silence. A missed sync is the case this
+exists for.
+
+**A warning is never repeated.** Each reminder is keyed on the domain, the
+ladder step and the expiry date. That last part is what makes renewals work
+with no code to reset anything: renewing moves the date, so the whole ladder
+becomes due again for the new one.
+
+The hour is stored with a timezone offset rather than read from the host clock,
+because the host is usually a container running in UTC while the person who
+said "2am" meant 2am where they live. The page shows each job's last run, what
+it did, how long it took and when it will next run — a switch that has been on
+for a month while every run failed looks exactly like one that is working, so
+the last result is shown rather than the switch.
+
+You can also press **Run now** on either job. It takes the same lock as the
+scheduler, so pressing it while last night's run is still going does not start
+a second one.
+
+## Two-factor authentication
+
+The Super Admin account can reach every DNS zone, database, mailbox and FTP
+login the portal manages. One password is not a proportionate defence for that,
+so **Settings → Two-factor authentication** adds a six-digit code at sign-in.
+
+It works with Google Authenticator, Microsoft Authenticator, Authy, 1Password
+or anything else that implements RFC 6238 — the implementation is checked
+against the specification's own test vectors, so every one of them agrees with
+it.
+
+Setting it up shows a QR code, and the QR is drawn on your own server: the
+shared secret never travels to a third-party chart service, which is how this
+leaks in other systems. **Nothing is saved to the account until you enter a
+working code from the app**, so a badly scanned QR or a tab closed halfway
+leaves you exactly where you were rather than locked out by a security feature.
+
+You then get ten **recovery codes**, shown once. Only a fingerprint of each is
+stored, so the portal genuinely cannot show them again — not to you, and not to
+anyone who has the database. Each works once, and using one is recorded along
+with how many are left.
+
+A few details that matter:
+
+- The secret is encrypted at rest, like every other credential here.
+- A code that has been used cannot be used again inside its thirty-second
+  window, so somebody who reads it over your shoulder gets nothing.
+- The password alone produces a *pending* sign-in, not a session. It expires
+  after five minutes, and expires into nothing rather than into access.
+- Turning it off, or reissuing recovery codes, asks for your password again —
+  walking up to an unlocked screen is not enough to remove it.
+- A wrong code is alerted on separately from a wrong password: somebody who has
+  the password and is working on the second factor is a different, more urgent
+  situation.
+
+## Invoices and quotations
+
+**Invoices & Quotes** raises both, with or without GST, and numbers them per
+financial year: `INV/2026-27/0001`.
+
+Fill in your registered name, address, state code and GSTIN under **Plans &
+Pricing → Business details** first. That is deliberately separate from the
+storefront's marketing name, because the name a website uses is very often not
+the name a tax document has to carry.
+
+**With GST**, the tax splits by the two state codes: CGST + SGST within your
+state, one IGST line across a border. A customer's own GSTIN fills their state
+in by itself, since the first two digits of a GSTIN are the state code.
+
+**Without GST**, the document is issued as a bill of supply and says so on its
+face. That is not a degraded mode — it is what a business below the
+registration threshold is supposed to issue. If you have not saved a GSTIN,
+this is what you get, rather than a tax invoice claiming a number you do not
+have.
+
+Prices can be entered tax-exclusive or tax-inclusive. Inclusive prices are
+worked backwards rather than multiplied down: at 18%, ₹118 holds exactly ₹100
+of value and ₹18 of tax, and the total is what you typed, to the paisa.
+
+Every amount is a whole number of paise, never a float, and the arithmetic is
+tested over every combination of rate, quantity, discount and rounding to check
+the lines always reconcile with the totals. A discount is split across the
+lines in amounts that add back to exactly the discount, because each line is
+taxed at its own rate.
+
+A **quotation converts into an invoice** without changing the quotation: the
+two point at each other, and what you offered stays exactly as it was offered.
+Payments can be partial — the balance stays on the invoice, and it is only
+marked paid when the whole amount is there. An invoice that has been issued
+cannot have its figures edited, and a cancelled one keeps its number: a gap in
+a series is ordinary, a repeat is a problem at assessment time.
+
+**On PDFs, plainly:** nothing here generates a PDF file. The document page is
+laid out to be printed, and **Print / Save as PDF** is your browser producing
+the file. Emailing a document sends the lines and totals as text, and says so —
+claiming an attachment and sending a text body would be a small lie that costs
+trust the first time somebody looks.
+
+## Support tickets
+
+Customers open tickets from **Support**, and every message stays in the thread
+so a month later you can see what was asked and what was answered.
+
+The moment a ticket is opened you are emailed it in full, and the customer gets
+an acknowledgement with a reference to quote. Your replies are emailed to them;
+theirs are alerted to you. **Internal notes** are yours alone — excluded by the
+query rather than hidden in the interface, so they are not one API call away
+from being read by the person they were written about. A note does not email
+the customer and does not change who the ticket is waiting on.
+
+The ticket is saved before anything is sent, so a mail server that is down
+costs you the notification and never the customer's message.
+
 ## Roles and access
 
 **Super Admin** manages everything: providers, all domains, users, and resource
@@ -784,10 +920,21 @@ Nothing needs to be running first — each suite starts its own server on its ow
 port. Set `TEST_BASE_URL` to aim the end-to-end suite at a server you are
 already running instead, which is useful against a deployment.
 
-Covers authentication, authorization boundaries, provider configuration,
-credential handling, domains, DNS, email, files, webmail, technology detection
-and the database tools, plus the full sync flow including the no-duplicates
+Covers authentication, two-factor sign-in, authorization boundaries, provider
+configuration, credential handling, domains, DNS, email, files, webmail,
+technology detection, the database tools, GST invoicing, support tickets and
+the overnight jobs, plus the full sync flow including the no-duplicates
 guarantee.
+
+**The suites run one at a time**, which is why `npm test` passes
+`--test-concurrency=1`. They share one database and one row of application
+settings, so a suite that switches alerts off to check the default would
+otherwise be doing it while another has just switched them on. Running a
+single file during development is still quick:
+
+```bash
+npm run test:file tests/billing.test.js
+```
 
 **What runs against something real, and what runs against a stub:**
 
@@ -798,6 +945,9 @@ guarantee.
 | Technology detection | A real FTP server holding real WordPress, Laravel, Next.js, static and PHP trees, plus a real HTTP server serving the markup those platforms send |
 | Database | A real MySQL or MariaDB server |
 | Hostinger adapter, sync, DNS writes | A local stub serving Hostinger's documented response shapes |
+| Change alerts, support tickets, expiry reminders | A real SMTP server (`smtp-server`), with the messages parsed and read back |
+| Two-factor codes | The RFC 6238 test vectors, so every authenticator app agrees with us |
+| GST arithmetic | A sweep over every rate, quantity, discount and inclusive-pricing combination, checking the lines always reconcile with the totals |
 
 The provider suites use a stub because Hostinger's API cannot be reached from a
 test run without live credentials. Everything else talks to a real server of
@@ -826,11 +976,12 @@ scripts/
 src/
   server.js            Express app and middleware
   config.js            Environment configuration
-  lib/                 Encryption, storage, mail, SQL, DNS zones, detection, helpers
+  lib/                 Encryption, storage, mail, SQL, DNS zones, detection, GST, TOTP, helpers
   middleware/          Authentication, authorization, validation
   providers/           Pluggable provider adapters (hostinger.js)
   routes/              API endpoints
-  services/            Provider credentials, sync, store, notifications
+  services/            Provider credentials, sync, store, mail, notifications,
+                       scheduler, expiry reminders, two-factor, billing, tickets
 public-store/          The public storefront, served at /
   index.html           Shell
   css/store.css        Styles

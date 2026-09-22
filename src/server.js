@@ -19,6 +19,9 @@ import { storeRouter } from './routes/store.js';
 import { catalogRouter } from './routes/catalog.js';
 import { ordersRouter } from './routes/orders.js';
 import { settingsRouter } from './routes/settings.js';
+import { billingRouter } from './routes/billing.js';
+import { ticketsRouter } from './routes/tickets.js';
+import { startScheduler } from './services/scheduler.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -87,6 +90,8 @@ app.use('/api/store', storeRouter);
 app.use('/api/catalog', catalogRouter);
 app.use('/api/orders', ordersRouter);
 app.use('/api/settings', settingsRouter);
+app.use('/api/billing', billingRouter);
+app.use('/api/tickets', ticketsRouter);
 
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Unknown API endpoint.' }));
 
@@ -181,6 +186,11 @@ app.use((err, _req, res, _next) => {
 
 const server = app.listen(config.port, () => {
   console.log(`\n  Hosting portal running on port ${config.port}\n`);
+
+  // Nightly sync and expiry reminders. The timer is unref'd and every job is
+  // guarded by a lock and a last-run time, so starting it here costs nothing
+  // when the feature is switched off — which it is until somebody turns it on.
+  startScheduler();
 });
 
 server.on('error', (err) => {

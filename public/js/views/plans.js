@@ -53,6 +53,7 @@ export async function renderPlans() {
     plansCard(plans),
     tldCard(tlds),
     settingsCard(settings),
+    businessCard(settings),
   ]);
 
   return frag;
@@ -431,6 +432,150 @@ function settingsCard(settings) {
           'queue until you check your account and confirm it. Treat a customer-supplied reference as a claim, not proof.',
       ),
       el('label', { class: 'check' }, isOpen, el('span', {}, 'Store is open — visitors can place orders')),
+      el('div', { style: 'margin-top:18px' }, save),
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The business, as it appears on an invoice
+//
+// Separate from the storefront settings above, and deliberately so: the
+// marketing name a website uses is very often not the registered name a tax
+// document has to carry, and putting them in one form invites somebody to
+// type the brand where the law wants the company.
+// ---------------------------------------------------------------------------
+
+function businessCard(settings) {
+  const inputs = {
+    legalName: el('input', { type: 'text', value: settings.legalName || '', placeholder: 'Web Edge Solutions Pvt Ltd' }),
+    addressLine1: el('input', { type: 'text', value: settings.addressLine1 || '' }),
+    addressLine2: el('input', { type: 'text', value: settings.addressLine2 || '' }),
+    city: el('input', { type: 'text', value: settings.city || '' }),
+    stateName: el('input', { type: 'text', value: settings.stateName || '', placeholder: 'Uttar Pradesh' }),
+    stateCode: el('input', { type: 'text', value: settings.stateCode || '', placeholder: '09' }),
+    pincode: el('input', { type: 'text', value: settings.pincode || '', placeholder: '226001' }),
+    gstin: el('input', { type: 'text', value: settings.gstin || '', placeholder: '09AABCU9603R1ZM' }),
+    pan: el('input', { type: 'text', value: settings.pan || '', placeholder: 'AABCU9603R' }),
+    bankName: el('input', { type: 'text', value: settings.bankName || '' }),
+    bankAccount: el('input', { type: 'text', value: settings.bankAccount || '' }),
+    bankIfsc: el('input', { type: 'text', value: settings.bankIfsc || '', placeholder: 'HDFC0001234' }),
+    bankBranch: el('input', { type: 'text', value: settings.bankBranch || '' }),
+    invoicePrefix: el('input', { type: 'text', value: settings.invoicePrefix || 'INV', style: 'max-width:110px' }),
+    quotationPrefix: el('input', { type: 'text', value: settings.quotationPrefix || 'QTN', style: 'max-width:110px' }),
+    quotationValidDays: el('input', { type: 'number', min: '1', value: settings.quotationValidDays ?? 15, style: 'max-width:110px' }),
+  };
+
+  const defaultTax = el(
+    'select',
+    { style: 'max-width:110px' },
+    ...[0, 5, 12, 18, 28].map((r) =>
+      el('option', { value: String(r), selected: (settings.defaultTaxPct ?? 18) === r }, `${r}%`),
+    ),
+  );
+  const gstByDefault = el('input', { type: 'checkbox', checked: settings.gstEnabledByDefault !== false });
+
+  const invoiceTerms = el('textarea', { rows: 3 });
+  invoiceTerms.value = settings.invoiceTerms || '';
+  const quotationTerms = el('textarea', { rows: 3 });
+  quotationTerms.value = settings.quotationTerms || '';
+
+  const alertHost = el('div');
+  const save = el('button', { class: 'btn primary' }, 'Save business details');
+
+  save.onclick = submitHandler(save, alertHost, async () => {
+    const body = Object.fromEntries(Object.entries(inputs).map(([k, i]) => [k, i.value.trim()]));
+    body.defaultTaxPct = Number(defaultTax.value);
+    body.gstEnabledByDefault = gstByDefault.checked;
+    body.quotationValidDays = Number(inputs.quotationValidDays.value) || 15;
+    body.invoiceTerms = invoiceTerms.value.trim();
+    body.quotationTerms = quotationTerms.value.trim();
+    const res = await api('/catalog/store-settings', { method: 'PUT', body });
+    toast(res.message, 'ok');
+    refresh();
+  });
+
+  return el(
+    'div',
+    { class: 'card', style: 'margin-top:18px' },
+    el(
+      'div',
+      { class: 'card-head' },
+      el(
+        'div',
+        { class: 'grow' },
+        el('h2', {}, 'Business details'),
+        el('p', {}, 'What appears on your invoices and quotations. Nothing here is shown on the public site.'),
+      ),
+      el('span', { class: `badge ${settings.gstin ? 'ok' : 'warn'}` }, settings.gstin ? 'GST registered' : 'No GSTIN'),
+    ),
+    el(
+      'div',
+      { class: 'card-body' },
+      alertHost,
+      !settings.gstin
+        ? el(
+            'div',
+            { class: 'alert info' },
+            el('span', { class: 'strong' }, 'Without a GSTIN, invoices carry no tax. '),
+            'They are issued as a bill of supply, which is correct for a business below the registration ' +
+              'threshold. Add your number here the day you register.',
+          )
+        : null,
+      el(
+        'div',
+        { class: 'grid-2' },
+        el(
+          'div',
+          {},
+          el('h3', { style: 'font-size:15px;margin-bottom:12px' }, 'Registered name and address'),
+          field('Legal name', inputs.legalName, 'The registered name, if it differs from the brand above.'),
+          field('Address', inputs.addressLine1),
+          field('', inputs.addressLine2),
+          el('div', { class: 'form-row' }, field('City', inputs.city), field('PIN code', inputs.pincode)),
+          el(
+            'div',
+            { class: 'form-row' },
+            field('State', inputs.stateName),
+            field('State code', inputs.stateCode, 'Two digits. Decides CGST+SGST or IGST.'),
+          ),
+          el('div', { class: 'form-row' }, field('GSTIN', inputs.gstin), field('PAN', inputs.pan)),
+        ),
+        el(
+          'div',
+          {},
+          el('h3', { style: 'font-size:15px;margin-bottom:12px' }, 'Bank details'),
+          el('p', { class: 'hint', style: 'margin:-6px 0 12px' }, 'Printed on unpaid invoices, for customers who do not use UPI.'),
+          field('Bank', inputs.bankName),
+          field('Account number', inputs.bankAccount),
+          el('div', { class: 'form-row' }, field('IFSC', inputs.bankIfsc), field('Branch', inputs.bankBranch)),
+
+          el('h3', { style: 'font-size:15px;margin:20px 0 12px' }, 'Numbering and tax'),
+          el(
+            'div',
+            { class: 'form-row' },
+            field('Invoice prefix', inputs.invoicePrefix),
+            field('Quotation prefix', inputs.quotationPrefix),
+          ),
+          el('p', { class: 'hint', style: 'margin:-6px 0 12px' }, 'Numbers run per financial year: INV/2026-27/0001.'),
+          el(
+            'div',
+            { class: 'form-row' },
+            field('Default GST rate', defaultTax),
+            field('Quotations valid for', inputs.quotationValidDays, 'days'),
+          ),
+          el(
+            'label',
+            { class: 'check', style: 'margin-top:4px' },
+            gstByDefault,
+            el('span', {}, 'New documents start with GST switched on'),
+          ),
+        ),
+      ),
+      el('div', { class: 'grid-2', style: 'margin-top:16px' },
+        field('Invoice terms', invoiceTerms, 'Printed at the bottom of every invoice.'),
+        field('Quotation terms', quotationTerms),
+      ),
       el('div', { style: 'margin-top:18px' }, save),
     ),
   );

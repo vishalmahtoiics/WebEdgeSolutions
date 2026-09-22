@@ -21,20 +21,25 @@ const AREAS = [
   ['notifyUsers', 'Accounts', 'A portal account created or deleted.'],
   ['notifySettings', 'Settings', 'Connection details or these notification settings changed.'],
   ['notifyOrders', 'Orders', 'A new order from the public site, or a payment reported.'],
-  ['notifySecurity', 'Sign-in failures', 'Somebody trying passwords against your portal.'],
+  ['notifySecurity', 'Sign-in failures', 'Somebody trying passwords against your portal, or a wrong two-factor code.'],
+  ['notifySupport', 'Support tickets', 'A customer opening a ticket or replying to one.'],
+  ['notifyBilling', 'Invoices', 'An invoice or quotation raised, or a payment recorded.'],
+  ['notifySchedule', 'Overnight jobs', 'A domain about to expire, or a nightly sync that failed.'],
 ];
 
 const EVENT_TONE = (event) => {
   if (event.startsWith('security')) return 'danger';
   if (/(deleted|destroyed|destructive)/.test(event)) return 'danger';
-  if (event.startsWith('order')) return 'ok';
+  if (event.startsWith('order') || event.startsWith('billing')) return 'ok';
+  if (event.startsWith('schedule')) return 'warn';
   return 'accent';
 };
 
 export async function renderNotifications() {
-  const [{ settings }, feed] = await Promise.all([
+  const [{ settings }, feed, jobsResult] = await Promise.all([
     api('/settings'),
     api('/settings/activity?take=60').catch(() => ({ entries: [], total: 0, undelivered: 0 })),
+    api('/settings/jobs').catch(() => ({ jobs: [] })),
   ]);
 
   const frag = el('div');
@@ -58,9 +63,230 @@ export async function renderNotifications() {
         )
       : null,
     settingsCard(settings),
+    scheduleCard(settings, jobsResult.jobs),
     activityCard(feed),
   ]);
   return frag;
+}
+
+// ---------------------------------------------------------------------------
+// Work that happens on its own
+// ---------------------------------------------------------------------------
+
+/// The nightly jobs, and whether last night actually happened.
+///
+/// The last result is the point of this card. "Auto-sync: on" tells you
+/// nothing — a switch that has been on for a month while every run failed
+/// looks exactly the same as one that is working.
+function scheduleCard(settings, jobs) {
+  const jobsEnabled = el('input', { type: 'checkbox', checked: Boolean(settings.jobsEnabled) });
+  const autoSync = el('input', { type: 'checkbox', checked: settings.autoSyncEnabled !== false });
+  const expiryOn = el('input', { type: 'checkbox', checked: settings.expiryRemindersEnabled !== false });
+  const remindCustomer = el('input', { type: 'checkbox', checked: Boolean(settings.expiryRemindCustomer) });
+
+  const hour = el(
+    'select',
+    { style: 'max-width:130px' },
+    ...Array.from({ length: 24 }, (_, h) =>
+      el('option', { value: String(h), selected: (settings.jobHour ?? 2) === h }, `${String(h).padStart(2, '0')}:00`),
+    ),
+  );
+
+  // A short list rather than every zone in the world: this portal is written
+  // for India, and the others are here so a container elsewhere still works.
+  const ZONES = [
+    [330, 'India (IST, UTC+5:30)'],
+    [0, 'UTC'],
+    [240, 'Gulf (UTC+4)'],
+    [60, 'Central Europe (UTC+1)'],
+    [-300, 'US Eastern (UTC−5)'],
+    [480, 'Singapore (UTC+8)'],
+  ];
+  const zone = el(
+    'select',
+    { style: 'max-width:230px' },
+    ...ZONES.map(([offset, label]) =>
+      el('option', { value: String(offset), selected: (settings.jobTimezoneOffset ?? 330) === offset }, label),
+    ),
+  );
+
+  const ladder = el('input', {
+    type: 'text',
+    value: settings.expiryReminderDays || '30,15,7,1',
+    placeholder: '30,15,7,1',
+  });
+
+  const alertHost = el('div');
+  const save = el('button', { class: 'btn primary' }, 'Save schedule');
+
+  save.onclick = submitHandler(save, alertHost, async () => {
+    await api('/settings', {
+      method: 'PUT',
+      body: {
+        jobsEnabled: jobsEnabled.checked,
+        jobHour: Number(hour.value),
+        jobTimezoneOffset: Number(zone.value),
+        autoSyncEnabled: autoSync.checked,
+        expiryRemindersEnabled: expiryOn.checked,
+        expiryRemindCustomer: remindCustomer.checked,
+        expiryReminderDays: ladder.value.trim(),
+      },
+    });
+    toast('Schedule saved.', 'ok');
+    refresh();
+  });
+
+  return el(
+    'div',
+    { class: 'card', style: 'margin-top:18px' },
+    el(
+      'div',
+      { class: 'card-head' },
+      el(
+        'div',
+        { class: 'grow' },
+        el('h2', {}, 'Overnight jobs'),
+        el('p', {}, 'Sync your providers and warn about expiring domains, without anyone pressing anything.'),
+      ),
+      el('span', { class: `badge ${settings.jobsEnabled ? 'ok' : ''}` }, settings.jobsEnabled ? 'On' : 'Off'),
+    ),
+    el(
+      'div',
+      { class: 'card-body' },
+      alertHost,
+      el(
+        'label',
+        { class: 'check', style: 'margin-bottom:14px' },
+        jobsEnabled,
+        el(
+          'span',
+          {},
+          el('span', { class: 'strong' }, 'Run jobs automatically'),
+          el('div', { class: 'small muted' }, 'The master switch. Everything below is off while this is.'),
+        ),
+      ),
+      el('div', { class: 'form-row' }, field('Run at', hour), field('In this timezone', zone)),
+      el(
+        'p',
+        { class: 'hint', style: 'margin:-6px 0 18px' },
+        'A machine that was switched off at that hour catches up when it comes back, rather than skipping ' +
+          'a day quietly.',
+      ),
+
+      el('hr', { style: 'border:0;border-top:1px solid var(--border);margin:6px 0 18px' }),
+
+      el(
+        'div',
+        { class: 'grid-2' },
+        el(
+          'div',
+          {},
+          el(
+            'label',
+            { class: 'check', style: 'align-items:flex-start;margin-bottom:10px' },
+            autoSync,
+            el(
+              'span',
+              {},
+              el('span', { class: 'strong' }, 'Nightly sync'),
+              el('div', { class: 'small muted' }, 'Pull every provider\u2019s domains, DNS and mailboxes overnight.'),
+            ),
+          ),
+        ),
+        el(
+          'div',
+          {},
+          el(
+            'label',
+            { class: 'check', style: 'align-items:flex-start;margin-bottom:10px' },
+            expiryOn,
+            el(
+              'span',
+              {},
+              el('span', { class: 'strong' }, 'Domain expiry reminders'),
+              el('div', { class: 'small muted' }, 'Warn before a domain lapses and the site goes dark.'),
+            ),
+          ),
+          field('Warn this many days ahead', ladder, 'One email per step, and renewing resets them all.'),
+          el(
+            'label',
+            { class: 'check', style: 'align-items:flex-start' },
+            remindCustomer,
+            el(
+              'span',
+              {},
+              el('span', { class: 'strong' }, 'Tell the customer too'),
+              el('div', { class: 'small muted' }, 'Emails whoever the domain is assigned to, as well as you.'),
+            ),
+          ),
+        ),
+      ),
+
+      el('div', { style: 'margin-top:16px' }, save),
+
+      jobs?.length
+        ? el(
+            'div',
+            { style: 'margin-top:22px' },
+            el('h3', { style: 'font-size:15px;margin-bottom:10px' }, 'Last run'),
+            el(
+              'table',
+              { style: 'width:100%' },
+              el(
+                'thead',
+                {},
+                el('tr', {}, el('th', {}, 'Job'), el('th', {}, 'Last run'), el('th', {}, 'Result'), el('th', {}, 'Next'), el('th', {}, '')),
+              ),
+              el(
+                'tbody',
+                {},
+                jobs.map((job) => jobRow(job)),
+              ),
+            ),
+          )
+        : null,
+    ),
+  );
+}
+
+function jobRow(job) {
+  const run = el('button', { class: 'btn sm' }, 'Run now');
+  const alertHost = el('div');
+
+  run.onclick = submitHandler(run, alertHost, async () => {
+    const res = await api(`/settings/jobs/${job.id}/run`, { method: 'POST' });
+    toast(res.message, res.ok ? 'ok' : 'error');
+    refresh();
+  });
+
+  return el(
+    'tr',
+    {},
+    el('td', {}, el('span', { class: 'strong small' }, job.label), job.running ? el('div', { class: 'badge accent' }, 'running') : null),
+    el(
+      'td',
+      { class: 'small muted nowrap' },
+      job.lastRunAt ? relativeTime(job.lastRunAt) : el('span', { class: 'muted' }, 'never'),
+    ),
+    el(
+      'td',
+      { class: 'small' },
+      job.lastRunAt
+        ? el(
+            'span',
+            {},
+            el('span', { class: `badge ${job.lastOk ? 'ok' : 'warn'}` }, job.lastOk ? 'ok' : 'failed'),
+            el('div', { class: 'small muted' }, job.lastMessage || ''),
+          )
+        : el('span', { class: 'muted' }, '\u2014'),
+    ),
+    el(
+      'td',
+      { class: 'small muted nowrap' },
+      job.enabled && job.nextRunAt ? formatDate(job.nextRunAt, { withTime: true }) : el('span', { class: 'muted' }, 'off'),
+    ),
+    el('td', { class: 'right' }, run, alertHost),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +462,9 @@ function activityCard(feed) {
       ['settings', 'Settings'],
       ['order', 'Orders'],
       ['security', 'Sign-in failures'],
+      ['support', 'Support'],
+      ['billing', 'Invoices'],
+      ['schedule', 'Overnight jobs'],
     ].map(([value, label]) => el('option', { value }, label)),
   );
 

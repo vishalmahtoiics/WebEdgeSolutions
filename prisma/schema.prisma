@@ -36,12 +36,28 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  /// Two-factor authentication. The shared secret is encrypted at rest the
+  /// same way provider tokens are: a database dump on its own must not be
+  /// enough to generate valid codes.
+  totpSecret    String?
+  /// Null means enrolment was never completed. A secret without this is a
+  /// half-finished setup and must not be accepted at sign-in.
+  totpEnabledAt DateTime?
+  /// The last 30-second step a code was accepted for. A valid code is valid
+  /// for its whole window, so without this the same six digits could be
+  /// replayed by anyone who saw them.
+  totpLastStep  BigInt?
+
   domains         UserDomain[]
   serverResource  ServerResource?
   queryLog        DatabaseQueryLog[]
   ordersPlaced    Order[]            @relation("OrderCustomer")
   ordersConfirmed Order[]            @relation("OrderConfirmedBy")
   activityLogs    ActivityLog[]
+  recoveryCodes   RecoveryCode[]
+  tickets         Ticket[]
+  ticketMessages  TicketMessage[]
+  billingDocs     BillingDocument[]
 
   @@map("users")
 }
@@ -154,6 +170,9 @@ model Domain {
   activity      ActivityLog[]
   settings      DomainSettings?
   assignments   UserDomain[]
+  reminders     ExpiryReminder[]
+  tickets       Ticket[]
+  billingDocs   BillingDocument[]
 
   @@index([providerId])
   @@map("domains")
@@ -479,10 +498,11 @@ model Order {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  plan        Plan?   @relation(fields: [planId], references: [id], onDelete: SetNull)
-  confirmedBy User?   @relation("OrderConfirmedBy", fields: [confirmedById], references: [id], onDelete: SetNull)
-  domain      Domain? @relation(fields: [domainId], references: [id], onDelete: SetNull)
-  user        User?   @relation("OrderCustomer", fields: [userId], references: [id], onDelete: SetNull)
+  billingDocs BillingDocument[]
+  plan        Plan?             @relation(fields: [planId], references: [id], onDelete: SetNull)
+  confirmedBy User?             @relation("OrderConfirmedBy", fields: [confirmedById], references: [id], onDelete: SetNull)
+  domain      Domain?           @relation(fields: [domainId], references: [id], onDelete: SetNull)
+  user        User?             @relation("OrderCustomer", fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([status, createdAt])
   @@map("orders")
@@ -510,6 +530,46 @@ model StoreSettings {
   currency String  @default("INR")
   /// Closes the shop without deleting anything.
   isOpen   Boolean @default(true)
+
+  // -------------------------------------------------------------------------
+  // Who is issuing the invoice.
+  //
+  // Separate from the storefront's marketing name above: a tax document needs
+  // the registered name and address, which is often not the brand name.
+  // -------------------------------------------------------------------------
+
+  legalName    String?
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  /// Two digits, as GST uses them: "09" is Uttar Pradesh, "27" Maharashtra.
+  /// This is what decides CGST + SGST against IGST, so it is not decorative.
+  stateCode    String?
+  stateName    String?
+  pincode      String?
+  gstin        String?
+  pan          String?
+
+  /// Shown on the invoice for customers who pay by transfer rather than UPI.
+  bankName    String?
+  bankAccount String?
+  bankIfsc    String?
+  bankBranch  String?
+
+  /// Prefixes for the document numbers, e.g. INV/2026-27/001.
+  invoicePrefix   String @default("INV")
+  quotationPrefix String @default("QTN")
+
+  /// What a new line item starts at. 18% covers hosting and most services.
+  defaultTaxPct       Int     @default(18)
+  /// Whether new documents have GST on by default. Off is entirely legitimate:
+  /// a business below the registration threshold issues a bill of supply.
+  gstEnabledByDefault Boolean @default(true)
+
+  invoiceTerms       String?
+  quotationTerms     String?
+  /// How long a quotation stands, in days.
+  quotationValidDays Int     @default(15)
 
   updatedAt DateTime @updatedAt
 
@@ -596,8 +656,361 @@ model AppSettings {
   notifySettings  Boolean @default(true)
   notifyOrders    Boolean @default(true)
   notifySecurity  Boolean @default(true)
+  notifySupport   Boolean @default(true)
+  notifySchedule  Boolean @default(true)
+  notifyBilling   Boolean @default(true)
+
+  // -------------------------------------------------------------------------
+  // Work that happens on its own, once a day.
+  // -------------------------------------------------------------------------
+
+  /// The master switch for everything scheduled. Off by default: a portal that
+  /// starts contacting providers and customers the moment it boots would be a
+  /// surprise, and surprises in this area cost trust.
+  jobsEnabled Boolean @default(false)
+
+  /// The hour jobs run at, 0-23, in the timezone below. Small hours by
+  /// default — a full sync talks to a provider for a while, and a reminder is
+  /// better read in the morning than at midnight.
+  jobHour           Int @default(2)
+  /// Minutes east of UTC. 330 is India, and the portal is written for India.
+  /// Stored rather than read from the host so a container in UTC still runs
+  /// these at the hour the operator meant.
+  jobTimezoneOffset Int @default(330)
+
+  /// Pull every provider's domains, mailboxes and DNS overnight.
+  autoSyncEnabled Boolean @default(false)
+
+  /// Tell somebody before a domain lapses.
+  expiryRemindersEnabled Boolean @default(false)
+  /// How many days ahead to warn, comma separated. One email per offset per
+  /// expiry date, so renewing resets them.
+  expiryReminderDays     String  @default("30,15,7,1")
+  /// Whether the customer assigned to the domain is told as well, or only you.
+  /// Off by default: telling a customer is a business decision, not a default.
+  expiryRemindCustomer   Boolean @default(false)
 
   updatedAt DateTime @updatedAt
 
   @@map("app_settings")
+}
+
+// ---------------------------------------------------------------------------
+// Work that happens on its own.
+//
+// One row per job, holding both the lock and the history. A single row doing
+// both jobs is deliberate: the thing that stops two workers running a sync at
+// once is the same thing that answers "did it run last night, and did it
+// work?", so the two can never disagree.
+// ---------------------------------------------------------------------------
+
+model ScheduledJob {
+  /// The job's own name — "nightly-sync", "domain-expiry" — not a cuid. There
+  /// is exactly one row per job and the name is how the code finds it.
+  id String @id
+
+  /// When it last finished, whether or not it succeeded. This is what makes
+  /// "once a day" mean once a day across restarts: a container that is
+  /// redeployed four times before lunch must not run the sync four times.
+  lastRunAt      DateTime?
+  lastOk         Boolean?
+  lastMessage    String?
+  lastDurationMs Int?
+
+  /// Taken while the job runs and cleared afterwards. A stale lock — a process
+  /// killed mid-run — is broken after an hour rather than blocking the job
+  /// forever.
+  runningSince DateTime?
+
+  updatedAt DateTime @updatedAt
+
+  @@map("scheduled_jobs")
+}
+
+/// A reminder that has already gone out, so it does not go out twice.
+///
+/// The unique key includes the expiry date, which is what makes renewals work
+/// without any extra code: renewing moves `expiresAt`, so the key changes and
+/// the whole ladder of reminders is due again for the new date.
+model ExpiryReminder {
+  id       String @id @default(cuid())
+  domainId String
+
+  /// Which rung of the ladder: 30, 15, 7, 1. Zero is the day itself.
+  daysBefore Int
+  /// The expiry this was about, to the day.
+  expiresOn  DateTime @db.Date
+
+  sentAt    DateTime @default(now())
+  /// Whether the email actually went. Recorded for the same reason the
+  /// activity log records it: "I never got a warning" needs an answer.
+  delivered Boolean  @default(false)
+  sentTo    String?
+
+  domain Domain @relation(fields: [domainId], references: [id], onDelete: Cascade)
+
+  @@unique([domainId, daysBefore, expiresOn])
+  @@index([domainId])
+  @@map("expiry_reminders")
+}
+
+// ---------------------------------------------------------------------------
+// Two-factor authentication
+// ---------------------------------------------------------------------------
+
+/// A single-use code for signing in when the authenticator app is gone.
+///
+/// Hashed, not stored: these are as good as the password, and a database dump
+/// must not contain working ones. SHA-256 rather than bcrypt because they are
+/// long random strings rather than chosen passwords — there is nothing to
+/// brute-force — and sign-in has to try them one at a time.
+model RecoveryCode {
+  id     String @id @default(cuid())
+  userId String
+
+  codeHash String
+  /// A hint the owner can recognise in a list, e.g. "3F2K". Never enough to
+  /// use, and only ever shown to the account it belongs to.
+  hint     String
+  usedAt   DateTime?
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("recovery_codes")
+}
+
+// ---------------------------------------------------------------------------
+// Quotations and invoices
+//
+// Money is in paise here for the same reason it is everywhere else, and tax is
+// computed from whole-number rates rather than stored as a float. An invoice
+// is a legal document: the arithmetic on it has to be exact, and it has to
+// still say the same thing in three years.
+// ---------------------------------------------------------------------------
+
+enum DocumentKind {
+  QUOTATION
+  INVOICE
+}
+
+enum DocumentStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  PAID
+  CANCELLED
+}
+
+model BillingDocument {
+  id String @id @default(cuid())
+
+  kind   DocumentKind
+  /// The number on the document: INV/2026-27/0001. Unique, sequential within
+  /// its series, and never reused — a cancelled invoice keeps its number.
+  number String       @unique
+  /// The financial year it belongs to, "2026-27". April to March, because
+  /// that is the year GST is filed against.
+  series String
+
+  status DocumentStatus @default(DRAFT)
+
+  // The customer, copied rather than referenced. An address that changes next
+  // year must not quietly rewrite a document that has already been issued.
+  customerName      String
+  customerEmail     String?
+  customerPhone     String?
+  customerAddress   String?
+  customerGstin     String?
+  /// Two digits. Together with the seller's, this decides CGST + SGST against
+  /// IGST, which is the one thing a GST invoice cannot get wrong.
+  customerStateCode String?
+
+  /// Links back to whatever this is about, where there is something.
+  userId   String?
+  domainId String?
+  orderId  String?
+
+  issueDate  DateTime  @default(now())
+  dueDate    DateTime?
+  /// Quotations lapse; invoices do not.
+  validUntil DateTime?
+
+  /// Off is a real case, not an oversight: below the registration threshold a
+  /// business issues a bill of supply with no tax on it at all.
+  gstEnabled       Boolean @default(true)
+  /// The seller's own details at the moment of issue, copied for the same
+  /// reason the customer's are.
+  sellerGstin      String?
+  sellerStateCode  String?
+  /// True when the two states differ, so one IGST line replaces CGST + SGST.
+  isInterState     Boolean @default(false)
+  /// Whether the prices as typed already have tax in them.
+  pricesIncludeTax Boolean @default(false)
+
+  subtotalMinor   Int @default(0)
+  discountMinor   Int @default(0)
+  taxableMinor    Int @default(0)
+  cgstMinor       Int @default(0)
+  sgstMinor       Int @default(0)
+  igstMinor       Int @default(0)
+  totalMinor      Int @default(0)
+  amountPaidMinor Int @default(0)
+
+  currency String @default("INR")
+
+  notes String?
+  terms String?
+
+  /// When it was emailed, and when the money arrived. Both answer questions
+  /// that otherwise depend on somebody's memory.
+  sentOn           DateTime?
+  paidOn           DateTime?
+  paymentReference String?
+
+  /// A quotation that became an invoice points at the invoice, and the
+  /// invoice points back. Neither is a copy of the other: the quotation stays
+  /// exactly as it was quoted.
+  convertedToId   String? @unique
+  convertedFromId String? @unique
+
+  createdById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items  BillingItem[]
+  user   User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  domain Domain?       @relation(fields: [domainId], references: [id], onDelete: SetNull)
+  order  Order?        @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([kind, issueDate])
+  @@index([status])
+  @@map("billing_documents")
+}
+
+model BillingItem {
+  id         String @id @default(cuid())
+  documentId String
+
+  description String
+  /// HSN for goods, SAC for services — 998315 is web hosting. Typed rather
+  /// than guessed: getting it wrong on a filed return is the customer's
+  /// problem, so the portal does not invent one.
+  hsnCode     String?
+
+  /// Whole units. Hosting is sold by the year, not by the 1.5 year.
+  quantity       Int
+  unitPriceMinor Int
+  /// Whole percent: 0, 5, 12, 18, 28. GST has no rate that needs a fraction
+  /// for anything this portal sells.
+  taxRatePct     Int @default(18)
+
+  lineSubtotalMinor Int
+  lineDiscountMinor Int @default(0)
+  lineTaxableMinor  Int
+  lineTaxMinor      Int
+  lineTotalMinor    Int
+
+  sortOrder Int @default(0)
+
+  document BillingDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+  @@map("billing_items")
+}
+
+/// The next number in each series, so two documents created at the same moment
+/// cannot take the same one. Incremented with an atomic UPDATE, which is the
+/// only way to get this right under concurrency.
+model DocumentCounter {
+  id String @id @default(cuid())
+
+  kind       DocumentKind
+  series     String
+  nextNumber Int          @default(1)
+
+  @@unique([kind, series])
+  @@map("document_counters")
+}
+
+// ---------------------------------------------------------------------------
+// Support
+// ---------------------------------------------------------------------------
+
+enum TicketStatus {
+  OPEN
+  AWAITING_CUSTOMER
+  AWAITING_SUPPORT
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+model Ticket {
+  id String @id @default(cuid())
+
+  /// Short and sayable over the phone: TKT-7K3M9Q.
+  reference String @unique
+  subject   String
+
+  status   TicketStatus   @default(OPEN)
+  priority TicketPriority @default(NORMAL)
+  /// Billing, Technical, Email, Domain, Other. Free text with a suggested
+  /// list rather than an enum, so a category can be added without a migration.
+  category String?
+
+  userId   String
+  domainId String?
+
+  /// Who spoke last, so the list can sort by what is waiting on you. Kept
+  /// alongside `status` rather than derived from it: an admin can mark a
+  /// ticket resolved without that changing who replied last.
+  lastReplyAt     DateTime @default(now())
+  lastReplyByRole Role     @default(USER)
+
+  closedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  domain   Domain?         @relation(fields: [domainId], references: [id], onDelete: SetNull)
+  messages TicketMessage[]
+
+  @@index([status, lastReplyAt])
+  @@index([userId, lastReplyAt])
+  @@map("tickets")
+}
+
+model TicketMessage {
+  id       String @id @default(cuid())
+  ticketId String
+
+  /// Null once the account is gone; the label keeps the thread readable.
+  authorId    String?
+  authorLabel String
+  authorRole  Role
+
+  body String
+
+  /// A note for your own side of the desk. Never returned to the customer —
+  /// enforced in the query, not by hiding it in the interface.
+  isInternal Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author User?  @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([ticketId, createdAt])
+  @@map("ticket_messages")
 }

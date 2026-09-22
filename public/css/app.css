@@ -464,3 +464,186 @@ tr.unread td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
   .mail-folders { flex-direction: row; flex-wrap: wrap; }
   .mail-folders .nav-item { width: auto; }
 }
+
+/* ---------------------------------------------------------------------------
+   Invoices and quotations
+   ---------------------------------------------------------------------------
+
+   The sheet is laid out to be printed. There is no PDF library behind this:
+   the browser's own "Save as PDF" is what produces the file, and the print
+   rules below are what make the result look like a document rather than a
+   screenshot of an admin panel.
+   --------------------------------------------------------------------------- */
+
+.doc-sheet { max-width: 880px; }
+
+.doc-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+.doc-seller-name { font-size: 19px; font-weight: 650; letter-spacing: -0.01em; }
+.doc-title-block { text-align: right; }
+.doc-title {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  margin-bottom: 2px;
+}
+.doc-rule { border: 0; border-top: 2px solid var(--border-strong); margin: 18px 0; }
+
+.doc-parties {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 24px;
+  margin-bottom: 22px;
+}
+.doc-label {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 5px;
+}
+
+.doc-table { width: 100%; border-collapse: collapse; }
+.doc-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 9px 10px;
+  border-bottom: 1.5px solid var(--border-strong);
+  white-space: nowrap;
+}
+.doc-table td { padding: 11px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.doc-table .right, .doc-table th.right { text-align: right; }
+
+.doc-totals { display: flex; justify-content: flex-end; margin-top: 18px; }
+.doc-total-rows { min-width: 280px; }
+.doc-total-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 40px;
+  padding: 6px 10px;
+  font-size: 14px;
+}
+.doc-total-row.strong {
+  font-weight: 700;
+  font-size: 16px;
+  border-top: 1.5px solid var(--border-strong);
+  margin-top: 4px;
+  padding-top: 10px;
+}
+.doc-words {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.doc-foot {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 28px;
+  margin-top: 28px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+/* The editor's line rows. */
+.doc-section {
+  font-size: 15px;
+  font-weight: 650;
+  margin: 20px 0 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.doc-section:first-child { margin-top: 0; }
+
+.doc-edit-head,
+.doc-edit-row {
+  display: grid;
+  grid-template-columns: 1fr 120px 80px 130px 95px 38px;
+  gap: 8px;
+  align-items: center;
+}
+.doc-edit-head {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.doc-edit-row { margin-bottom: 8px; }
+.doc-edit-row input, .doc-edit-row select { margin: 0; }
+
+.doc-preview {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 6px;
+  background: var(--bg);
+}
+
+@media (max-width: 720px) {
+  .doc-parties, .doc-foot { grid-template-columns: 1fr; }
+  .doc-title-block { text-align: left; }
+  /* The line editor stops being a grid on a phone and becomes a stack: six
+     columns at 320px would be six unusable columns. */
+  .doc-edit-head { display: none; }
+  .doc-edit-row { grid-template-columns: 1fr 1fr; }
+  .doc-edit-row input:first-child { grid-column: 1 / -1; }
+}
+
+/* What a printed document looks like.
+
+   Everything that belongs to the portal — the sidebar, the header, the action
+   buttons — is removed, and the sheet is given the page to itself. Without
+   this, printing an invoice produces a navigation menu with an invoice in the
+   middle of it. */
+@media print {
+  .topbar, .sidebar, .scrim, .no-print, .toast-host, #modal-root { display: none !important; }
+  body, .shell, .content { background: #fff !important; margin: 0 !important; padding: 0 !important; }
+  .shell { display: block !important; }
+  .content { max-width: none !important; }
+  .card, .doc-sheet {
+    border: 0 !important;
+    box-shadow: none !important;
+    max-width: none !important;
+    margin: 0 !important;
+  }
+  .card-body { padding: 0 !important; }
+  .doc-words { background: #f3f4f6 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .doc-title { color: #000 !important; }
+  /* A line item must not be split across two pages. */
+  .doc-table tr { page-break-inside: avoid; }
+  .doc-totals, .doc-foot { page-break-inside: avoid; }
+  @page { margin: 14mm; }
+}
+
+/* ---------------------------------------------------------------------------
+   Support tickets
+   --------------------------------------------------------------------------- */
+
+.ticket-msg {
+  padding: 12px 14px;
+  border-radius: 0 8px 8px 0;
+  background: var(--bg);
+  margin-bottom: 12px;
+}
+.ticket-msg:last-child { margin-bottom: 0; }
+.ticket-msg-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}

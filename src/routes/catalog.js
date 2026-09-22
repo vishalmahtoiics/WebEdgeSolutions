@@ -13,6 +13,7 @@ import { validate } from '../middleware/validate.js';
 import { asyncHandler, badRequest, notFound } from '../lib/errors.js';
 import { toMinor, formatMinor } from '../lib/money.js';
 import { getStoreSettings, whatsappLink, upiLink } from '../services/storeService.js';
+import { GST_RATES, looksLikeGstin } from '../lib/gst.js';
 
 export const catalogRouter = Router();
 catalogRouter.use(requireAuth, requireAdmin);
@@ -251,10 +252,80 @@ const settingsSchema = z.object({
     .refine((v) => v === '' || /^\+?[0-9\s-]{7,}$/.test(v), 'Enter the number with its country code, e.g. +91 98765 43210.')
     .optional(),
   isOpen: z.coerce.boolean().optional(),
+
+  // -------------------------------------------------------------------------
+  // The business, as it appears on an invoice.
+  //
+  // Separate from the storefront's marketing name above: a tax document needs
+  // the registered name and the registered address, which is very often not
+  // the brand the website uses.
+  // -------------------------------------------------------------------------
+
+  legalName: z.string().trim().max(200).optional(),
+  addressLine1: z.string().trim().max(200).optional(),
+  addressLine2: z.string().trim().max(200).optional(),
+  city: z.string().trim().max(100).optional(),
+  // Two digits, as GST writes them. This decides CGST + SGST against IGST, so
+  // it is checked rather than taken on trust.
+  stateCode: z
+    .string()
+    .trim()
+    .max(2)
+    .refine((v) => v === '' || /^\d{1,2}$/.test(v), 'A GST state code is one or two digits, e.g. 09.')
+    .optional(),
+  stateName: z.string().trim().max(100).optional(),
+  pincode: z
+    .string()
+    .trim()
+    .max(10)
+    .refine((v) => v === '' || /^\d{6}$/.test(v), 'A PIN code is six digits.')
+    .optional(),
+  gstin: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .max(15)
+    .refine((v) => v === '' || looksLikeGstin(v), 'That does not look like a GSTIN.')
+    .optional(),
+  pan: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .max(10)
+    .refine((v) => v === '' || /^[A-Z]{5}\d{4}[A-Z]$/.test(v), 'A PAN looks like ABCDE1234F.')
+    .optional(),
+
+  bankName: z.string().trim().max(120).optional(),
+  bankAccount: z.string().trim().max(40).optional(),
+  bankIfsc: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .max(11)
+    .refine((v) => v === '' || /^[A-Z]{4}0[A-Z0-9]{6}$/.test(v), 'An IFSC looks like HDFC0001234.')
+    .optional(),
+  bankBranch: z.string().trim().max(120).optional(),
+
+  invoicePrefix: z.string().trim().max(10).optional(),
+  quotationPrefix: z.string().trim().max(10).optional(),
+  defaultTaxPct: z.coerce
+    .number()
+    .int()
+    .refine((v) => GST_RATES.includes(v), `Use one of ${GST_RATES.join(', ')}%.`)
+    .optional(),
+  gstEnabledByDefault: z.coerce.boolean().optional(),
+  invoiceTerms: z.string().trim().max(2000).optional(),
+  quotationTerms: z.string().trim().max(2000).optional(),
+  quotationValidDays: z.coerce.number().int().min(1).max(365).optional(),
 });
 
 const presentSettings = (settings) => ({
   ...settings,
+  /// Whether invoices can carry GST at all. Without a GSTIN of your own there
+  /// is nothing to charge tax under, and the billing page says so rather than
+  /// letting somebody issue a tax invoice that should have been a bill of
+  /// supply.
+  canChargeGst: Boolean(settings.gstin),
   // Shown so the admin can see what a customer will see before anyone pays.
   whatsappLink: whatsappLink(settings.whatsappNumber, 'Hi, I have a question about hosting.'),
   upiPreview: settings.upiId
@@ -291,9 +362,11 @@ catalogRouter.put(
 
     res.json({
       settings: presentSettings(settings),
-      message: settings.upiId
-        ? 'Storefront settings saved.'
-        : 'Saved. Add a UPI ID before the store can ask anyone to pay.',
+      message: !settings.upiId
+        ? 'Saved. Add a UPI ID before the store can ask anyone to pay.'
+        : !settings.gstin
+          ? 'Saved. Add your GSTIN to charge GST on invoices.'
+          : 'Storefront and business settings saved.',
     });
   }),
 );

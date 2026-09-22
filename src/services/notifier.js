@@ -16,9 +16,11 @@
 //   otherwise put twenty messages in an inbox, and an alert nobody can stand to
 //   read is an alert nobody reads.
 
-import nodemailer from 'nodemailer';
 import { prisma } from '../db.js';
-import { encrypt, decryptMaybe } from '../lib/crypto.js';
+import { encrypt } from '../lib/crypto.js';
+import { getAppSettings, recipients, send, friendly } from './mailer.js';
+
+export { getAppSettings };
 
 /// Which switch governs which event, by the event name's first part.
 const AREA_SWITCH = {
@@ -30,6 +32,9 @@ const AREA_SWITCH = {
   settings: 'notifySettings',
   order: 'notifyOrders',
   security: 'notifySecurity',
+  support: 'notifySupport',
+  schedule: 'notifySchedule',
+  billing: 'notifyBilling',
 };
 
 /// How many alerts may be sent in a rolling window before the rest are
@@ -38,20 +43,10 @@ const AREA_SWITCH = {
 const BURST_LIMIT = Number(process.env.NOTIFY_BURST_LIMIT) || 30;
 const BURST_WINDOW_MS = 10 * 60 * 1000;
 
-const SEND_TIMEOUT_MS = 15000;
-
 /// Times of recent sends, for the burst cap. In memory on purpose: it is a
 /// safety valve, not a record, and it should reset when the process does.
 let recentSends = [];
 let suppressedSinceCap = 0;
-
-export async function getAppSettings() {
-  return prisma.appSettings.upsert({
-    where: { id: 'default' },
-    create: { id: 'default' },
-    update: {},
-  });
-}
 
 /// The settings as the browser may see them: everything except the password,
 /// which never leaves this process.
@@ -59,45 +54,6 @@ export function presentAppSettings(settings) {
   const { smtpPassword, ...rest } = settings;
   return { ...rest, hasSmtpPassword: Boolean(smtpPassword) };
 }
-
-const recipients = (settings) =>
-  String(settings.notifyEmails || '')
-    .split(/[,;\s]+/)
-    .map((e) => e.trim())
-    .filter((e) => e.includes('@'));
-
-function transportFor(settings) {
-  const port = settings.smtpPort || (settings.smtpSecure ? 465 : 587);
-  return nodemailer.createTransport({
-    host: settings.smtpHost,
-    port,
-    secure: settings.smtpSecure !== false && port === 465,
-    auth: settings.smtpUser ? { user: settings.smtpUser, pass: decryptMaybe(settings.smtpPassword) } : undefined,
-    connectionTimeout: SEND_TIMEOUT_MS,
-    greetingTimeout: SEND_TIMEOUT_MS,
-    socketTimeout: SEND_TIMEOUT_MS,
-    // Hosting providers very often present a certificate that does not match
-    // the host name they tell you to use. Refusing those would make this
-    // unusable on exactly the servers it is meant for; the same trade-off is
-    // documented for FTPS and IMAP elsewhere in this project.
-    tls: { rejectUnauthorized: false },
-  });
-}
-
-const friendly = (err) => {
-  const message = err?.message || 'Unknown error';
-  const code = err?.code || '';
-  if (code === 'EAUTH' || /535|authentication/i.test(message)) return 'The mail server rejected the username or password.';
-  if (code === 'ENOTFOUND') return 'The SMTP host could not be found. Check the host name.';
-  if (code === 'ECONNREFUSED') return 'The server refused the connection. Check the host and port.';
-  if (code === 'ETIMEDOUT' || /timed? ?out/i.test(message)) {
-    return 'The mail server did not respond in time. Check the port — 465 is usually encrypted, 587 usually is not.';
-  }
-  if (/wrong version number|ssl/i.test(message)) {
-    return 'The connection failed in a way that usually means the port and the encryption setting disagree. Try 465 with encryption on, or 587 with it off.';
-  }
-  return message;
-};
 
 // ---------------------------------------------------------------------------
 // Recording
@@ -192,22 +148,6 @@ const skip = (entry, reason) =>
   prisma.activityLog
     .update({ where: { id: entry.id }, data: { notified: false, notifyError: reason } })
     .catch(() => null);
-
-async function send(settings, to, { subject, text }) {
-  const transport = transportFor(settings);
-  try {
-    await transport.sendMail({
-      from: settings.fromName
-        ? `"${settings.fromName}" <${settings.fromAddress || settings.smtpUser}>`
-        : settings.fromAddress || settings.smtpUser,
-      to: to.join(', '),
-      subject,
-      text,
-    });
-  } finally {
-    transport.close();
-  }
-}
 
 /// The message. Plain text on purpose: these are read on a phone, often in a
 /// hurry, and the first line should say everything that matters.

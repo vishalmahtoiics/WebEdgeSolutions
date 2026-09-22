@@ -12,6 +12,7 @@ import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { asyncHandler, badRequest } from '../lib/errors.js';
 import { getAppSettings, presentAppSettings, saveAppSettings, sendTestEmail, record } from '../services/notifier.js';
+import { JOBS, jobStatus, runJob } from '../services/scheduler.js';
 
 export const settingsRouter = Router();
 settingsRouter.use(requireAuth, requireAdmin);
@@ -76,6 +77,31 @@ const settingsSchema = z.object({
   notifySettings: z.coerce.boolean().optional(),
   notifyOrders: z.coerce.boolean().optional(),
   notifySecurity: z.coerce.boolean().optional(),
+  notifySupport: z.coerce.boolean().optional(),
+  notifySchedule: z.coerce.boolean().optional(),
+  notifyBilling: z.coerce.boolean().optional(),
+
+  // Work that happens on its own.
+  jobsEnabled: z.coerce.boolean().optional(),
+  jobHour: z.coerce.number().int().min(0).max(23).optional(),
+  jobTimezoneOffset: z.coerce.number().int().min(-720).max(840).optional(),
+  autoSyncEnabled: z.coerce.boolean().optional(),
+  expiryRemindersEnabled: z.coerce.boolean().optional(),
+  expiryReminderDays: z
+    .string()
+    .trim()
+    .max(120)
+    .refine(
+      (v) =>
+        v === '' ||
+        v
+          .split(/[,;\s]+/)
+          .filter(Boolean)
+          .every((d) => /^\d{1,3}$/.test(d) && Number(d) <= 365),
+      'Use whole numbers of days, separated by commas — for example 30,15,7,1.',
+    )
+    .optional(),
+  expiryRemindCustomer: z.coerce.boolean().optional(),
 });
 
 settingsRouter.put(
@@ -172,5 +198,45 @@ settingsRouter.get(
     ]);
 
     res.json({ entries, total, undelivered });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Work that happens on its own
+// ---------------------------------------------------------------------------
+
+/// Every job with its last result, so the page can say whether last night
+/// actually happened rather than only that it was switched on.
+settingsRouter.get(
+  '/jobs',
+  asyncHandler(async (_req, res) => {
+    res.json({ jobs: await jobStatus() });
+  }),
+);
+
+/// Runs one now, without waiting for its hour.
+///
+/// The same code path the scheduler uses, including the lock — so pressing
+/// this while last night's run is still going does not start a second one.
+settingsRouter.post(
+  '/jobs/:id/run',
+  asyncHandler(async (req, res) => {
+    if (!JOBS[req.params.id]) throw badRequest('Unknown job.');
+
+    const result = await runJob(req.params.id, { manual: true, actor: req.user });
+    if (!result.ran) throw badRequest(result.reason);
+
+    await record({
+      event: `schedule.${req.params.id}.manual`,
+      actor: req.user,
+      summary: `Ran ${JOBS[req.params.id].label} by hand`,
+      detail: result.message,
+    });
+
+    res.json({
+      ok: result.ok,
+      message: result.message,
+      jobs: await jobStatus(),
+    });
   }),
 );

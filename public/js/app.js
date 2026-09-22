@@ -13,6 +13,8 @@ import { renderWebmail } from './views/webmail.js';
 import { renderPlans } from './views/plans.js';
 import { renderOrders } from './views/orders.js';
 import { renderNotifications } from './views/notifications.js';
+import { renderBilling } from './views/billing.js';
+import { renderTickets } from './views/tickets.js';
 
 const root = document.getElementById('app');
 
@@ -25,6 +27,8 @@ const ADMIN_NAV = [
   { route: 'domains', label: 'Domains', icon: 'globe' },
   { route: 'orders', label: 'Orders', icon: 'cart' },
   { route: 'plans', label: 'Plans & Pricing', icon: 'tag' },
+  { route: 'billing', label: 'Invoices & Quotes', icon: 'receipt' },
+  { route: 'support', label: 'Support', icon: 'lifebuoy' },
   { route: 'users', label: 'Users', icon: 'users' },
   { route: 'providers', label: 'Providers / APIs', icon: 'plug' },
   { route: 'resources', label: 'Server Resources', icon: 'server' },
@@ -36,6 +40,8 @@ const USER_NAV = [
   { route: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
   { route: 'domains', label: 'My Domains', icon: 'globe' },
   { route: 'emails', label: 'Emails', icon: 'mail' },
+  { route: 'billing', label: 'My Invoices', icon: 'receipt' },
+  { route: 'support', label: 'Support', icon: 'lifebuoy' },
   { route: 'resources', label: 'Resources', icon: 'server' },
   { route: 'settings', label: 'Profile', icon: 'settings' },
 ];
@@ -53,6 +59,8 @@ const VIEWS = {
   orders: renderOrders,
   plans: renderPlans,
   alerts: renderNotifications,
+  billing: renderBilling,
+  support: renderTickets,
 };
 
 // Routes a normal user must never reach, even by typing the hash directly.
