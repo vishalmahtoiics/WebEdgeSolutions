@@ -78,6 +78,7 @@
   color: inherit;
 }
 .topbar .brand:hover { text-decoration: none; }
+.topbar .brand .label { white-space: nowrap; }
 
 .topbar .logo {
   display: grid;
@@ -544,6 +545,12 @@
 
   .content { padding: 20px 16px 48px; }
   .topbar-user .who { display: none; }
+}
+
+@media (max-width: 430px) {
+  /* The mark alone is enough once the bar is this tight, and it keeps the
+     name from breaking across two lines. */
+  .topbar .brand .label { display: none; }
 }
 
 @media (max-width: 560px) {
