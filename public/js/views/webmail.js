@@ -364,8 +364,24 @@ export function passwordModal(domainId, mailbox) {
 
     // Check it before claiming success, so a typo is caught here rather than
     // on the first attempt to open the inbox.
-    const test = await api(`${base}/test`, { method: 'POST' }).catch((err) => ({ ok: false, imap: { message: err.message } }));
-    if (!test.ok) throw new Error(test.imap?.message || 'The mail server rejected that password.');
+    //
+    // The test answers 200 whether or not the sign-in worked, because it did
+    // what was asked; `ok` is what says how it went. The catch is only for a
+    // request that never got that far.
+    const test = await api(`${base}/test`, { method: 'POST' }).catch((err) => ({
+      ok: false,
+      imap: { message: err.message },
+    }));
+
+    if (!test.ok) {
+      // The server's own words. Anything else here is guesswork dressed up as
+      // an explanation.
+      throw new Error(
+        test.imap?.message ||
+          test.error ||
+          'The mail server would not accept that password, and did not say why.',
+      );
+    }
 
     toast('Mailbox password saved.', 'ok');
     close();

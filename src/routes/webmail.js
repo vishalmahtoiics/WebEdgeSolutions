@@ -131,7 +131,20 @@ webmailRouter.post(
       result.smtp = { ok: false, message: err.message };
     }
 
-    res.status(result.imap.ok ? 200 : 400).json({ ok: result.imap.ok, ...result });
+    // 200 either way. The request was well-formed and the server did exactly
+    // what was asked — it tried the credentials and is reporting what
+    // happened. A failed sign-in is an answer, not a bad request.
+    //
+    // It used to answer 400 with no `error` field, which the browser's API
+    // helper could only render as "Request failed (400)". The real reason was
+    // sitting in the body the whole time and was thrown away on the way to the
+    // screen. `error` is included as well, so any caller that only looks there
+    // still gets something true.
+    res.json({
+      ok: result.imap.ok,
+      ...result,
+      error: result.imap.ok ? null : result.imap.message,
+    });
   }),
 );
 

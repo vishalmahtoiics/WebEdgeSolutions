@@ -199,6 +199,56 @@ test('the connection can be tested', async () => {
   assert.equal(res.status, 200);
   assert.equal(res.data.imap.ok, true);
   assert.equal(res.data.smtp.ok, true);
+  assert.equal(res.data.error, null, 'nothing went wrong, so there is nothing to report');
+});
+
+test('a failed test reports the real reason instead of a bare status code', async () => {
+  // This used to answer 400 with no `error` field at all, which the browser
+  // could only render as "Request failed (400)" — while the reason sat in the
+  // body, unread, on its way to being thrown away. A failed sign-in is also
+  // not a bad request: the server did exactly what was asked and is saying
+  // how it went, so it answers 200 and `ok` carries the verdict.
+  const wrong = await admin(`/domains/${ctx.domainId}/emails/${ctx.mailboxId}/mail/password`, {
+    method: 'PUT',
+    body: { password: 'definitely-not-the-password' },
+  });
+  assert.equal(wrong.status, 200);
+
+  const res = await admin(`/domains/${ctx.domainId}/emails/${ctx.mailboxId}/mail/test`, { method: 'POST' });
+
+  assert.equal(res.status, 200, 'the test ran; its result is the answer');
+  assert.equal(res.data.ok, false);
+  assert.match(res.data.imap.message, /rejected this mailbox password/i);
+  // Repeated at the top level, so a caller that only looks at `error` — which
+  // is every generic API helper — still gets something true.
+  assert.equal(res.data.error, res.data.imap.message);
+  assert.ok(!JSON.stringify(res.data).includes('definitely-not-the-password'));
+
+  // Put it back for the tests that follow.
+  await admin(`/domains/${ctx.domainId}/emails/${ctx.mailboxId}/mail/password`, {
+    method: 'PUT',
+    body: { password: MAILBOX_PASSWORD },
+  });
+});
+
+test('opening a mailbox with no IMAP host says so, rather than failing blankly', async () => {
+  // The other half of the same complaint: every failure on the way to an
+  // inbox has to arrive as words, not as a number.
+  const saved = await prisma.domainSettings.findUnique({ where: { domainId: ctx.domainId } });
+  await prisma.domainSettings.update({ where: { domainId: ctx.domainId }, data: { imapHost: null } });
+
+  const folders = await admin(`/domains/${ctx.domainId}/emails/${ctx.mailboxId}/mail/folders`);
+  assert.equal(folders.status, 400);
+  assert.match(folders.data.error, /No incoming \(IMAP\) server is configured/i);
+
+  const test = await admin(`/domains/${ctx.domainId}/emails/${ctx.mailboxId}/mail/test`, { method: 'POST' });
+  assert.equal(test.data.ok, false);
+  assert.match(test.data.error, /No incoming \(IMAP\) server is configured/i);
+
+  await prisma.domainSettings.update({
+    where: { domainId: ctx.domainId },
+    data: { imapHost: saved.imapHost },
+  });
 });
 
 // --- Reading ----------------------------------------------------------------
