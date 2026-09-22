@@ -15,6 +15,7 @@ import { prisma } from '../db.js';
 import { validate } from '../middleware/validate.js';
 import { asyncHandler, badRequest, unauthorized, notFound } from '../lib/errors.js';
 import { encrypt, decrypt } from '../lib/crypto.js';
+import { record } from '../services/notifier.js';
 import {
   listFolders, listMessages, getMessage, getAttachment, getRawMessage,
   deleteMessage, moveMessage, setSeen, setFlagged,
@@ -39,9 +40,30 @@ const loginLimiter = rateLimit({
   message: { error: 'Too many sign-in attempts. Please try again in a few minutes.' },
 });
 
+/// What a visitor is told when sign-in fails for a reason that is not theirs
+/// to know. Whether a domain is hosted here is not something an
+/// unauthenticated stranger needs to learn.
+const VAGUE = 'We could not sign you in. Check the address and password.';
+
+/// Why a sign-in failed, in words meant for whoever runs this portal.
+///
+/// The visitor gets the message above and nothing else. This goes to the
+/// activity log, because the alternative — which is what this used to do — is
+/// that a customer says "it will not let me in", the administrator opens the
+/// portal, and there is nothing anywhere to say whether the password was wrong
+/// or the IMAP host was never filled in.
+async function recordFailure({ req, address, reason, detail }) {
+  await record({
+    event: 'security.webmail.failed',
+    summary: `Webmail sign-in failed for ${address}`,
+    detail: `${reason}\n\n${detail}`,
+    ip: req.ip,
+  });
+}
+
 /// Finds the mail servers for an address by looking up its domain in the
 /// portal. A domain nobody has configured cannot be signed in to.
-async function serversFor(address) {
+async function serversFor(address, req) {
   const domainName = String(address).split('@')[1]?.toLowerCase();
   if (!domainName) throw badRequest('Enter a full email address.');
 
@@ -50,10 +72,28 @@ async function serversFor(address) {
     include: { settings: true },
   });
 
-  if (!domain?.settings?.imapHost) {
-    // Deliberately vague: whether a domain is hosted here is not something an
-    // unauthenticated visitor needs to learn.
-    throw unauthorized('We could not sign you in. Check the address and password.');
+  if (!domain) {
+    await recordFailure({
+      req,
+      address,
+      reason: `No domain called ${domainName} exists in this portal.`,
+      detail:
+        'Add the domain under Domains, then fill in its IMAP and SMTP details under FTP & Server. ' +
+        'Until then nobody with an address at it can sign in here.',
+    });
+    throw unauthorized(VAGUE);
+  }
+
+  if (!domain.settings?.imapHost) {
+    await recordFailure({
+      req,
+      address,
+      reason: `${domainName} has no IMAP host saved.`,
+      detail:
+        'Open the domain, go to FTP & Server, and fill in the IMAP host and port. ' +
+        'Use "Test a mailbox sign-in" on that tab to check them before telling the customer to try again.',
+    });
+    throw unauthorized(VAGUE);
   }
 
   return { domain, settings: domain.settings };
@@ -89,7 +129,7 @@ mailAppRouter.post(
   validate(loginSchema),
   asyncHandler(async (req, res) => {
     const { address, password } = req.body;
-    const { domain, settings } = await serversFor(address);
+    const { domain, settings } = await serversFor(address, req);
 
     const imap = {
       host: settings.imapHost,
@@ -103,10 +143,43 @@ mailAppRouter.post(
     try {
       await listFolders(imap);
     } catch (err) {
-      if (err instanceof MailError && /rejected this mailbox password/i.test(err.message)) {
-        throw unauthorized('We could not sign you in. Check the address and password.');
+      const message = err?.message || 'The mail server request failed.';
+      const where = `${settings.imapHost}:${settings.imapPort || (settings.imapSecure ? 993 : 143)}` +
+        ` (${settings.imapSecure === false ? 'not encrypted' : 'encrypted'})`;
+
+      if (err instanceof MailError && /rejected this mailbox password/i.test(message)) {
+        await recordFailure({
+          req,
+          address,
+          reason: 'The mail server rejected the password.',
+          detail:
+            `Tried ${where}.\n\n` +
+            'The settings are reaching a real server, so this is the password, the address, or a ' +
+            'mailbox that does not exist on that server.',
+        });
+        throw unauthorized(VAGUE);
       }
-      throw err;
+
+      // Everything else is a connection problem: a wrong port, encryption set
+      // the wrong way, a firewall. This used to fall through as a generic
+      // "something went wrong", which sent the person off to reset a password
+      // that was never the problem — so it is now told apart and said plainly.
+      //
+      // Saying so does reveal that the address's domain is configured here.
+      // That is a fair trade: anyone can read a domain's MX records, and the
+      // cost of hiding it is a customer changing their password over and over
+      // while a server sits unreachable.
+      await recordFailure({
+        req,
+        address,
+        reason: 'The mail server could not be reached.',
+        detail: `Tried ${where}.\n\n${message}\n\nCheck the IMAP host, port and encryption under FTP & Server.`,
+      });
+
+      throw unauthorized(
+        'We could not reach the mail server for this address. This is a problem at our end, not with ' +
+          'your password — please try again shortly, or contact support.',
+      );
     }
 
     await new Promise((resolve, reject) =>

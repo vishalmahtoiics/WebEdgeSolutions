@@ -645,6 +645,38 @@ The only setup it needs is the domain's IMAP and SMTP settings under **FTP &
 Server**. Every mailbox on a domain that has those can sign in; no mailbox
 password has to be saved in the portal, and none is.
 
+### When somebody cannot sign in
+
+Webmail tells the person at the door almost nothing — "check the address and
+password" — because whether a domain is hosted here is not a stranger's
+business. That is right, and on its own it left *you* with no way to tell a
+wrong password from an IMAP host that was never filled in. Two things answer
+that:
+
+**Test a mailbox sign-in**, at the bottom of **FTP & Server**. Type a mailbox
+address and its password and it runs the same sign-in the mail app runs,
+against the same servers, and reports what the server actually said — separately
+for reading and for sending, with the host and port it used. The password is
+used for the test and never stored. Super Admin only: it is a small oracle on
+somebody's password, so it is not left open to every account.
+
+**The activity log.** Every failed webmail sign-in is recorded with the real
+reason, under **Alerts & Activity**. Four things it tells apart:
+
+| What the log says | What to do |
+| --- | --- |
+| No domain called *x* exists in this portal | Add the domain, then fill in its mail settings |
+| *x* has no IMAP host saved | Fill in IMAP host and port under FTP & Server |
+| The mail server rejected the password | The settings are fine — it is the password, the address, or a mailbox that does not exist |
+| The mail server could not be reached | Wrong host, wrong port, or encryption set the wrong way |
+
+That last one is also told to the person signing in, in those words. It used to
+come out as a generic failure, which sent them off to change a password that
+was never the problem. Saying it does reveal that the address's domain is
+configured here — a fair trade, since anyone can read a domain's MX records,
+and the alternative is a customer resetting their password over and over while
+a server sits unreachable.
+
 What it does:
 
 | | |

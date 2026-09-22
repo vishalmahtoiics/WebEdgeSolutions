@@ -19,6 +19,7 @@ import {
 import { filesRouter } from './files.js';
 import { deploymentsRouter } from './deployments.js';
 import { webmailRouter } from './webmail.js';
+import { listFolders, verifySmtp } from '../lib/mail.js';
 import { databaseRouter } from './database.js';
 import {
   presentDomainSummary,
@@ -413,6 +414,119 @@ function presentSettings(settings) {
 
 const blankToNull = (obj) =>
   Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, v === '' ? null : v]));
+
+/// Tries a real sign-in against this domain's mail servers, and reports what
+/// actually happened.
+///
+/// The standalone mail app deliberately tells a visitor nothing beyond "check
+/// the address and password", because whether a domain is hosted here is not a
+/// stranger's business. That leaves whoever runs the portal with no way to
+/// tell a wrong password from an IMAP host that was never filled in — so this
+/// is that way. Same credentials, same code path, the real error.
+///
+/// Super Admin only: it takes a password and returns a server's verdict on it,
+/// which is a small oracle and not something to leave open to every account.
+domainsRouter.post(
+  '/:id/mail-test',
+  withDomain(),
+  requireAdmin,
+  validate(
+    z.object({
+      address: z.string().trim().toLowerCase().email('Enter the full email address.'),
+      password: z.string().min(1, 'Enter the mailbox password.'),
+    }),
+  ),
+  asyncHandler(async (req, res) => {
+    const settings = await prisma.domainSettings.findUnique({ where: { domainId: req.domain.id } });
+    const { address, password } = req.body;
+
+    const checks = { address: null, imap: null, smtp: null };
+
+    // The mail app looks the servers up by the address's domain, so an
+    // address at a different domain would never reach these settings however
+    // well they work.
+    const addressDomain = address.split('@')[1];
+    checks.address =
+      addressDomain === req.domain.name
+        ? { ok: true, message: `Addresses at ${req.domain.name} are looked up against these settings.` }
+        : {
+            ok: false,
+            message:
+              `That address is at ${addressDomain}, not ${req.domain.name}. Signing in with it would ` +
+              `use ${addressDomain}'s settings, not these — test it on that domain instead.`,
+          };
+
+    if (!settings?.imapHost) {
+      checks.imap = {
+        ok: false,
+        message: 'No IMAP host is saved for this domain, so nobody can sign in to webmail with an address at it.',
+      };
+    } else {
+      try {
+        const folders = await listFolders({
+          host: settings.imapHost,
+          port: settings.imapPort,
+          secure: settings.imapSecure,
+          user: address,
+          password,
+        });
+        checks.imap = {
+          ok: true,
+          message: `Signed in and read ${folders.length} folder${folders.length === 1 ? '' : 's'}.`,
+        };
+      } catch (err) {
+        checks.imap = { ok: false, message: err?.message || 'The mail server request failed.' };
+      }
+    }
+
+    if (!settings?.smtpHost) {
+      checks.smtp = {
+        ok: false,
+        message: 'No SMTP host is saved, so this mailbox could read mail here but not send any.',
+      };
+    } else {
+      try {
+        await verifySmtp({
+          host: settings.smtpHost,
+          port: settings.smtpPort,
+          secure: settings.smtpSecure,
+          user: address,
+          password,
+        });
+        checks.smtp = { ok: true, message: 'Sending works.' };
+      } catch (err) {
+        checks.smtp = { ok: false, message: err?.message || 'The mail server refused to accept mail.' };
+      }
+    }
+
+    // The password is never stored by this, and never echoed back.
+    await record({
+      event: 'settings.domain.mail-tested',
+      actor: req.user,
+      domain: req.domain,
+      summary: `Tested a mailbox sign-in for ${req.domain.name}`,
+      detail:
+        `Address: ${address}\n` +
+        `IMAP:    ${checks.imap.ok ? 'ok' : `failed — ${checks.imap.message}`}\n` +
+        `SMTP:    ${checks.smtp.ok ? 'ok' : `failed — ${checks.smtp.message}`}`,
+    });
+
+    res.json({
+      ok: Boolean(checks.imap.ok),
+      checks,
+      servers: {
+        imap: settings?.imapHost
+          ? `${settings.imapHost}:${settings.imapPort || (settings.imapSecure === false ? 143 : 993)}` +
+            ` (${settings.imapSecure === false ? 'not encrypted' : 'encrypted'})`
+          : null,
+        smtp: settings?.smtpHost
+          ? `${settings.smtpHost}:${settings.smtpPort || (settings.smtpSecure === false ? 587 : 465)}` +
+            ` (${settings.smtpSecure === false ? 'not encrypted' : 'encrypted'})`
+          : null,
+      },
+    });
+  }),
+);
 
 domainsRouter.put(
   '/:id/settings',

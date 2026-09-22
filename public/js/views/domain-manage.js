@@ -1,8 +1,9 @@
 import {
   api, el, clear, appendAll, field, submitHandler, toast, openModal, confirmModal,
   statusBadge, sourceBadge, techBadge, TECH_SOURCE_LABEL,
-  emptyState, formatDate, relativeTime, formatMb,
+  emptyState, errorAlert, formatDate, relativeTime, formatMb,
 } from '../core.js';
+import { icon } from '../icons.js';
 import { navigate, refresh } from '../app.js';
 import { filesPanel } from './files.js';
 import { deployPanel } from './deploy.js';
@@ -1033,9 +1034,10 @@ function settingsPanel(data) {
         el('div', { class: 'form-row' }, field('SMTP host (outgoing)', inputs.smtpHost), field('SMTP port', inputs.smtpPort)),
         el(
           'p',
-          { class: 'hint', style: 'margin:0' },
+          { class: 'hint', style: 'margin:0 0 16px' },
           'Ports 993 (IMAP) and 465 (SMTP) are the usual encrypted ones. Your provider lists these under email or webmail settings.',
         ),
+        mailTest(d),
       ),
     ),
     el(
@@ -1133,4 +1135,88 @@ function editDomainModal(d) {
       ),
     footer: (closeFn) => [el('button', { class: 'btn', onclick: closeFn }, 'Cancel'), save],
   });
+}
+
+/// Tries a real sign-in and shows what actually went wrong.
+///
+/// The mail app tells a visitor only "check the address and password", because
+/// whether a domain is hosted here is not a stranger's business. That left
+/// nobody able to tell a wrong password from an IMAP host that was never
+/// filled in — this is where that is answered, with the same credentials and
+/// the same code path the mail app uses.
+function mailTest(domain) {
+  const address = el('input', { type: 'email', placeholder: `you@${domain.name}`, autocomplete: 'off' });
+  const password = el('input', { type: 'password', autocomplete: 'off' });
+  const run = el('button', { class: 'btn' }, icon('check', 16), 'Test sign-in');
+  const out = el('div');
+
+  const line = (label, check) =>
+    el(
+      'div',
+      { class: 'row', style: 'align-items:flex-start;gap:10px;margin-bottom:8px' },
+      el('span', { class: `badge ${check.ok ? 'ok' : 'danger'}` }, check.ok ? 'ok' : 'failed'),
+      el('span', { class: 'small grow' }, el('span', { class: 'strong' }, `${label}: `), check.message),
+    );
+
+  run.onclick = async () => {
+    clear(out);
+    if (!address.value.trim() || !password.value) {
+      return out.append(el('div', { class: 'alert warn' }, 'Enter a mailbox address and its password.'));
+    }
+
+    run.disabled = true;
+    run.classList.add('is-busy');
+    try {
+      const res = await api(`/domains/${domain.id}/mail-test`, {
+        method: 'POST',
+        body: { address: address.value.trim(), password: password.value },
+      });
+
+      out.append(
+        el(
+          'div',
+          { class: `alert ${res.ok ? 'ok' : 'error'}`, style: 'margin-bottom:12px' },
+          res.ok
+            ? 'This mailbox can sign in to webmail.'
+            : 'This mailbox cannot sign in. The reason is below.',
+        ),
+        line('Address', res.checks.address),
+        line('IMAP (reading)', res.checks.imap),
+        line('SMTP (sending)', res.checks.smtp),
+        el(
+          'p',
+          { class: 'hint', style: 'margin-top:10px' },
+          'Tried ',
+          el('span', { class: 'mono' }, res.servers.imap || 'no IMAP host'),
+          ' and ',
+          el('span', { class: 'mono' }, res.servers.smtp || 'no SMTP host'),
+          '.',
+        ),
+      );
+      // The password is not kept here either.
+      password.value = '';
+    } catch (err) {
+      out.append(errorAlert(err));
+    } finally {
+      run.disabled = false;
+      run.classList.remove('is-busy');
+      clear(run).append(icon('check', 16), 'Test sign-in');
+    }
+  };
+
+  return el(
+    'div',
+    { style: 'border-top:1px solid var(--border);padding-top:16px' },
+    el('h3', { style: 'font-size:15px;margin-bottom:4px' }, 'Test a mailbox sign-in'),
+    el(
+      'p',
+      { class: 'hint', style: 'margin:0 0 14px' },
+      'Checks these settings against the real server with a real mailbox, and reports what the server ' +
+        'said. Webmail deliberately tells the person signing in nothing useful, so this is where you find out.',
+    ),
+    el('div', { class: 'form-row' }, field('Mailbox address', address), field('Mailbox password', password)),
+    el('p', { class: 'hint', style: 'margin:-6px 0 12px' }, 'The password is used for this test and never stored.'),
+    run,
+    el('div', { style: 'margin-top:14px' }, out),
+  );
 }

@@ -493,3 +493,135 @@ test('a portal sign-in is not a webmail sign-in', async () => {
   const res = await admin('/api/webmail/folders');
   assert.equal(res.status, 401);
 });
+
+// ---------------------------------------------------------------------------
+// Finding out why somebody cannot sign in
+//
+// The visitor is deliberately told nothing useful, because whether a domain is
+// hosted here is not a stranger's business. That is right, and it left whoever
+// runs the portal with no way to tell a wrong password from an IMAP host that
+// was never filled in. These are the two halves of the answer: the real reason
+// goes to the activity log, and a Super Admin can reproduce the sign-in on
+// demand.
+// ---------------------------------------------------------------------------
+
+test('a failed sign-in records why, even though the visitor is not told', async () => {
+  const address = `nobody@${DOMAIN}`;
+  await stranger('/api/webmail/login', { method: 'POST', body: { address, password: 'not-the-password' } });
+
+  const entry = await prisma.activityLog.findFirst({
+    where: { event: 'security.webmail.failed', summary: { contains: address } },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  assert.ok(entry, 'the administrator has to be able to find out what happened');
+  assert.match(entry.detail, /rejected the password/i);
+  // The settings that were tried, so a wrong port is visible at a glance.
+  assert.match(entry.detail, /127\.0\.0\.1:/);
+  // And never the password itself.
+  assert.ok(!entry.detail.includes('not-the-password'));
+});
+
+test('an unconfigured domain is recorded as unconfigured, not as a bad password', async () => {
+  const bare = `unconfigured-${stamp}.example`;
+  const created = await admin('/api/domains', { method: 'POST', body: { name: bare } });
+
+  const res = await stranger('/api/webmail/login', {
+    method: 'POST',
+    body: { address: `someone@${bare}`, password: 'whatever' },
+  });
+  assert.equal(res.status, 401);
+  assert.match(res.data.error, /could not sign you in/i, 'the visitor still learns nothing');
+
+  const entry = await prisma.activityLog.findFirst({
+    where: { event: 'security.webmail.failed', summary: { contains: bare } },
+    orderBy: { createdAt: 'desc' },
+  });
+  assert.ok(entry);
+  assert.match(entry.detail, /no IMAP host/i, 'and the administrator learns everything');
+
+  await admin(`/api/domains/${created.data.domain.id}`, { method: 'DELETE' });
+});
+
+test('a mail server that cannot be reached says so instead of blaming the password', async () => {
+  // Port 1 is closed. Somebody told "check your password" here would change it
+  // over and over while the real fault sat in the port field.
+  const broken = `unreachable-${stamp}.example`;
+  const created = await admin('/api/domains', { method: 'POST', body: { name: broken } });
+  await admin(`/api/domains/${created.data.domain.id}/settings`, {
+    method: 'PUT',
+    body: { imapHost: '127.0.0.1', imapPort: 1, imapSecure: false },
+  });
+
+  const res = await stranger('/api/webmail/login', {
+    method: 'POST',
+    body: { address: `someone@${broken}`, password: 'whatever' },
+  });
+
+  assert.equal(res.status, 401);
+  assert.match(res.data.error, /could not reach the mail server/i);
+  assert.match(res.data.error, /not with your password/i);
+
+  const entry = await prisma.activityLog.findFirst({
+    where: { event: 'security.webmail.failed', summary: { contains: broken } },
+    orderBy: { createdAt: 'desc' },
+  });
+  assert.match(entry.detail, /could not be reached/i);
+
+  await admin(`/api/domains/${created.data.domain.id}`, { method: 'DELETE' });
+});
+
+test('an administrator can reproduce a sign-in and see the real verdict', async () => {
+  const good = await admin(`/api/domains/${ctx.domainId}/mail-test`, {
+    method: 'POST',
+    body: { address: ADDRESS, password: MAILBOX_PASSWORD },
+  });
+
+  assert.equal(good.status, 200);
+  assert.equal(good.data.ok, true);
+  assert.equal(good.data.checks.imap.ok, true);
+  assert.match(good.data.checks.imap.message, /folder/i);
+  assert.equal(good.data.checks.smtp.ok, true);
+  // The settings actually used, so a wrong port is obvious without guessing.
+  assert.match(good.data.servers.imap, /127\.0\.0\.1:\d+/);
+});
+
+test('the test reports a wrong password as a wrong password', async () => {
+  const res = await admin(`/api/domains/${ctx.domainId}/mail-test`, {
+    method: 'POST',
+    body: { address: ADDRESS, password: 'definitely-wrong' },
+  });
+
+  assert.equal(res.status, 200, 'a failed sign-in is an answer, not an error');
+  assert.equal(res.data.ok, false);
+  assert.equal(res.data.checks.imap.ok, false);
+  assert.match(res.data.checks.imap.message, /rejected this mailbox password/i);
+});
+
+test('the test catches an address that belongs to a different domain', async () => {
+  // A real mistake: the settings are perfect, but webmail looks servers up by
+  // the address's own domain, so this address would never reach them.
+  const res = await admin(`/api/domains/${ctx.domainId}/mail-test`, {
+    method: 'POST',
+    body: { address: 'someone@somewhere-else.example', password: MAILBOX_PASSWORD },
+  });
+
+  assert.equal(res.data.checks.address.ok, false);
+  assert.match(res.data.checks.address.message, /somewhere-else\.example/);
+  assert.match(res.data.checks.address.message, new RegExp(DOMAIN));
+});
+
+test('the sign-in test is Super Admin only, and never echoes the password', async () => {
+  const res = await admin(`/api/domains/${ctx.domainId}/mail-test`, {
+    method: 'POST',
+    body: { address: ADDRESS, password: MAILBOX_PASSWORD },
+  });
+  assert.ok(!JSON.stringify(res.data).includes(MAILBOX_PASSWORD));
+
+  // A signed-out caller gets nothing.
+  const anon = await stranger(`/api/domains/${ctx.domainId}/mail-test`, {
+    method: 'POST',
+    body: { address: ADDRESS, password: MAILBOX_PASSWORD },
+  });
+  assert.equal(anon.status, 401);
+});
