@@ -97,9 +97,10 @@ app.use('/api', (_req, res) => res.status(404).json({ error: 'Unknown API endpoi
 
 // Three front ends share this server:
 //
-//   /          the public storefront — plans, domain search, ordering
-//   /portal    the admin and customer portal
-//   /webmail   the standalone mail app, or MAIL_HOST if one is set
+//   /                        the public storefront — plans, domains, ordering
+//   /portal                  the admin and customer portal
+//   /mails, /mail, /webmail  the standalone mail app
+//   MAIL_HOST                the mail app again, on a hostname of its own
 //
 // The storefront has the root because it is the part strangers arrive at. The
 // portal sits under /portal, which costs its router nothing: it addresses its
@@ -147,7 +148,19 @@ const mountSpa = (base, dir) => {
 app.use('/shared', express.static(sharedDir, { maxAge: isProd ? '30d' : 0, immutable: isProd }));
 
 mountSpa('/portal', portalDir);
-mountSpa('/webmail', mailDir);
+
+// The mail app answers on more than one path on purpose.
+//
+// A customer told "your email is at webedgesolutions.in/mails" will type
+// /mail as often as /mails, and anyone who was given the old address should
+// not find it broken. Mounting the same directory three times costs nothing —
+// the app addresses its own assets relatively and keeps its routes in the URL
+// fragment, so it does not know or care which path it was reached through.
+//
+// mails.yourdomain.com stays the nicest address to give people; these are for
+// when a subdomain has not been set up, or somebody guesses.
+const MAIL_PATHS = ['/mails', '/mail', '/webmail'];
+for (const base of MAIL_PATHS) mountSpa(base, mailDir);
 
 // A dedicated mail hostname serves the mail app from its root instead.
 app.use((req, res, next) => {

@@ -17,8 +17,9 @@ export const config = {
   sessionSecret: required('SESSION_SECRET', 'dev-only-insecure-session-secret'),
   encryptionKey: required('ENCRYPTION_KEY', '0'.repeat(64)),
   secureCookies: String(env('SECURE_COOKIES')).toLowerCase() === 'true',
-  /// Hostname that serves the standalone webmail app instead of the portal,
-  /// e.g. mails.example.com. Unset means webmail is only reachable at /webmail.
+  /// Hostname that serves the standalone mail app from its root, e.g.
+  /// mails.example.com. Unset changes nothing else: the app is always
+  /// reachable at /mails, /mail and /webmail on the main site as well.
   mailHost: (env('MAIL_HOST') || '').toLowerCase(),
   admin: {
     email: env('ADMIN_EMAIL') || 'admin@example.com',

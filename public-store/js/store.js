@@ -146,6 +146,10 @@ function footer() {
       el('span', { class: 'grow' }, `© ${new Date().getFullYear()} ${c.businessName}`),
       c.supportEmail ? el('a', { href: `mailto:${c.supportEmail}` }, c.supportEmail) : null,
       c.whatsappLink ? el('a', { href: c.whatsappLink, target: '_blank', rel: 'noopener' }, 'WhatsApp') : null,
+      // Somebody looking for their email looks in the footer. /mails is the
+      // address to give people; the app also answers at /mail and /webmail,
+      // and at mails.yourdomain.com where that subdomain is set up.
+      el('a', { href: '/mails' }, 'Webmail'),
       el('a', { href: '/portal' }, 'Client login'),
     ),
   );

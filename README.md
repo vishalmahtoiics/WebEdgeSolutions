@@ -178,7 +178,7 @@ it, with no account:
 | --- | --- |
 | `/` | The storefront — hosting plans, domain search, ordering, payment |
 | `/portal` | The portal, for you and your customers |
-| `/webmail` | The mail app, or `MAIL_HOST` if one is set |
+| `/mails` | The mail app. Also at `/mail` and `/webmail`, and on `MAIL_HOST` if one is set |
 
 > **The portal moved to `/portal` when the storefront took the root.** Nothing
 > about it changed otherwise — it keeps its own routes in the URL hash, so the
@@ -618,18 +618,28 @@ Assigned users get webmail for mailboxes on their own domains.
 
 ### The standalone mail app
 
-There is also a full mail client that people reach on its own hostname, with no
-portal account at all: they go to the address, type their **email address and
-the mailbox's own password**, and they are in.
+There is also a full mail client that people reach with no portal account at
+all: they go to the address, type their **email address and the mailbox's own
+password**, and they are in.
 
-Point a hostname at the same app and set `MAIL_HOST`:
+**On the main site** it answers at three paths, all serving the same app:
+
+```
+yourdomain.com/mails      ← the one to give people
+yourdomain.com/mail       ← because half of them will type this
+yourdomain.com/webmail    ← the original address, still working
+```
+
+**On a hostname of its own**, point a subdomain at the same app and set
+`MAIL_HOST`:
 
 ```
 MAIL_HOST=mails.yourdomain.com
 ```
 
-That hostname then serves the mail client instead of the portal. Without it —
-or before the DNS exists — the same app is at `/webmail` on the normal address.
+That hostname then serves the mail client from its root instead of the
+storefront. It is the nicest address to hand out, but nothing depends on it:
+the paths above keep working whether the subdomain exists or not.
 
 The only setup it needs is the domain's IMAP and SMTP settings under **FTP &
 Server**. Every mailbox on a domain that has those can sign in; no mailbox
@@ -1115,7 +1125,7 @@ public/                The portal, served at /portal
   index.html           SPA shell
   css/app.css          Styles
   js/                  Frontend modules and views
-public-mail/           The standalone mail app (served on MAIL_HOST, or /webmail)
+public-mail/           The standalone mail app (/mails, /mail, /webmail, or MAIL_HOST)
   index.html           Shell
   css/mail.css         Styles
   js/                  Mail client modules
