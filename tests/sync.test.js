@@ -57,6 +57,9 @@ async function call(path, { method = 'GET', body } = {}) {
     headers: {
       ...(body ? { 'Content-Type': 'application/json' } : {}),
       ...(cookie ? { Cookie: cookie } : {}),
+      // Closed so no keep-alive socket is left to reset when the spawned
+      // server is killed at the end of the run.
+      Connection: 'close',
     },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -65,6 +68,19 @@ async function call(path, { method = 'GET', body } = {}) {
   const text = await res.text();
   return { status: res.status, data: text ? JSON.parse(text) : null };
 }
+
+/// Swallows connection resets on a test stub.
+///
+/// The portal keeps connections alive to these servers, and killing it at the
+/// end of the run resets them. Without a handler, that reset surfaces as an
+/// uncaughtException and fails the whole file — after every test in it has
+/// already passed.
+const ignoreResets = (server) => {
+  server.on('clientError', () => {});
+  server.on('error', () => {});
+  server.on('connection', (socket) => socket.on('error', () => {}));
+  return server;
+};
 
 test.before(async () => {
   stub = http.createServer((req, res) => {
@@ -93,6 +109,7 @@ test.before(async () => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(table[path]));
   });
+  ignoreResets(stub);
   await new Promise((r) => stub.listen(0, '127.0.0.1', r));
 
   server = spawn('node', ['src/server.js'], {
@@ -107,7 +124,7 @@ test.before(async () => {
   // Wait for the server to accept connections.
   for (let i = 0; i < 60; i += 1) {
     try {
-      const res = await fetch(`${BASE}/api/health`);
+      const res = await fetch(`${BASE}/api/health`, { headers: { Connection: 'close' } });
       if (res.ok) break;
     } catch {
       await new Promise((r) => setTimeout(r, 250));

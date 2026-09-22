@@ -5,6 +5,7 @@ import { prisma } from '../db.js';
 import { validate } from '../middleware/validate.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { asyncHandler, badRequest, notFound } from '../lib/errors.js';
+import { record } from '../services/notifier.js';
 
 export const usersRouter = Router();
 usersRouter.use(requireAdmin);
@@ -71,6 +72,13 @@ usersRouter.post(
       data: { email, name, role, isActive, passwordHash: await bcrypt.hash(password, 12) },
       include: { _count: { select: { domains: true } }, serverResource: true },
     });
+    await record({
+      event: 'user.created',
+      actor: req.user,
+      summary: `Created the account ${user.email}`,
+      detail: `Role: ${user.role === 'SUPER_ADMIN' ? 'Super Admin' : 'User'}`,
+    });
+
     res.status(201).json({ user: publicUser(user) });
   }),
 );
@@ -137,6 +145,12 @@ usersRouter.delete(
     }
 
     await prisma.user.delete({ where: { id: target.id } });
+    await record({
+      event: 'user.deleted',
+      actor: req.user,
+      summary: `Deleted the account ${target.email}`,
+    });
+
     res.json({ ok: true });
   }),
 );

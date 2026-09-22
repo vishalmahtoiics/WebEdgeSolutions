@@ -110,16 +110,21 @@ test('a Secure-cookie mismatch is reported instead of failing silently', async (
   });
   t.after(() => server.kill());
 
+  // Every request closes its connection, so killing the server at the end
+  // leaves no keep-alive socket to reset — a reset there surfaces as an
+  // uncaughtException and fails the file after the test has already passed.
+  const close = { Connection: 'close' };
+
   for (let i = 0; i < 60; i += 1) {
     try {
-      if ((await fetch(`${base}/api/health`)).ok) break;
+      if ((await fetch(`${base}/api/health`, { headers: close })).ok) break;
     } catch {
       await new Promise((r) => setTimeout(r, 250));
     }
   }
 
   const body = JSON.stringify({ email: 'admin@example.com', password: 'Admin@12345' });
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = { 'Content-Type': 'application/json', ...close };
 
   // Over plain HTTP the cookie would be discarded, so this must be an error.
   const overHttp = await fetch(`${base}/api/auth/login`, { method: 'POST', headers, body });

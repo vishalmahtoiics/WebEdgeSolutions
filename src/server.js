@@ -18,6 +18,7 @@ import { mailAppRouter } from './routes/mailapp.js';
 import { storeRouter } from './routes/store.js';
 import { catalogRouter } from './routes/catalog.js';
 import { ordersRouter } from './routes/orders.js';
+import { settingsRouter } from './routes/settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -85,6 +86,7 @@ app.use('/api/webmail', mailAppRouter);
 app.use('/api/store', storeRouter);
 app.use('/api/catalog', catalogRouter);
 app.use('/api/orders', ordersRouter);
+app.use('/api/settings', settingsRouter);
 
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Unknown API endpoint.' }));
 

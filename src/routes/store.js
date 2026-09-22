@@ -22,6 +22,7 @@ import { asyncHandler, badRequest, notFound } from '../lib/errors.js';
 import { getAdapter } from '../providers/index.js';
 import { loadProviderWithToken } from '../services/providerService.js';
 import { formatMinor } from '../lib/money.js';
+import { record } from '../services/notifier.js';
 import {
   publicStoreConfig, priceOrder, generateReference, paymentDetailsFor, upiQrSvg, upiLink,
   getStoreSettings, whatsappLink,
@@ -265,6 +266,20 @@ storeRouter.post(
       },
     });
 
+    // No actor: this is a stranger on the public site, so the alert carries
+    // the contact details instead of an account.
+    await record({
+      event: 'order.placed',
+      summary: `New order ${order.reference} — ${formatMinor(order.amountMinor, order.currency)}`,
+      detail:
+        `${priced.description}\n` +
+        `${order.domainName ? `Domain: ${order.domainName}\n` : ''}` +
+        `From: ${order.customerName} <${order.customerEmail}>, ${order.customerPhone}\n` +
+        `${order.message ? `\nThey said: ${order.message}\n` : ''}` +
+        '\nNothing is paid yet. Open Orders in the portal when they report a payment.',
+      ip: req.ip,
+    });
+
     res.status(201).json({
       reference: order.reference,
       description: priced.description,
@@ -370,6 +385,16 @@ storeRouter.post(
         paymentSubmittedAt: new Date(),
         status: 'PAYMENT_SUBMITTED',
       },
+    });
+
+    await record({
+      event: 'order.payment.reported',
+      summary: `Payment reported for ${order.reference} — ${formatMinor(order.amountMinor, order.currency)}`,
+      detail:
+        `Reference they gave: ${req.body.paymentReference}\n` +
+        `From: ${order.customerName} <${order.customerEmail}>, ${order.customerPhone}\n\n` +
+        'Nobody has checked this. Look at your account, then confirm it in the portal.',
+      ip: req.ip,
     });
 
     res.json({

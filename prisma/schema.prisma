@@ -41,6 +41,7 @@ model User {
   queryLog        DatabaseQueryLog[]
   ordersPlaced    Order[]            @relation("OrderCustomer")
   ordersConfirmed Order[]            @relation("OrderConfirmedBy")
+  activityLogs    ActivityLog[]
 
   @@map("users")
 }
@@ -150,6 +151,7 @@ model Domain {
   emailAccounts EmailAccount[]
   queryLog      DatabaseQueryLog[]
   orders        Order[]
+  activity      ActivityLog[]
   settings      DomainSettings?
   assignments   UserDomain[]
 
@@ -512,4 +514,90 @@ model StoreSettings {
   updatedAt DateTime @updatedAt
 
   @@map("store_settings")
+}
+
+// ---------------------------------------------------------------------------
+// Knowing what happened.
+//
+// Every change worth an administrator's attention is written here first, and
+// emailed second. That order matters: the record is the product, and the email
+// is one way of reading it. An SMTP server that is down, misconfigured or
+// simply slow must not cost you the history.
+// ---------------------------------------------------------------------------
+
+model ActivityLog {
+  id String @id @default(cuid())
+
+  /// A dotted name: "dns.record.deleted", "email.mailbox.created". Grouped by
+  /// its first part so a whole area can be switched off at once.
+  event String
+
+  /// Who did it. Null for something the system did, or once the account has
+  /// been deleted — the record of the act outlives the actor.
+  actorId    String?
+  /// Kept as text as well, so an entry still reads correctly after the account
+  /// it names is gone.
+  actorLabel String?
+  actorRole  String?
+
+  /// One line, already written for a person: "Deleted the MX record for @".
+  summary String
+  /// Anything worth having in the email but not in the headline.
+  detail  String?
+
+  /// What it happened to, where that makes sense.
+  domainId   String?
+  domainName String?
+
+  /// Where the request came from, for the sign-in failures.
+  ip String?
+
+  /// Whether an email went out, and why not when it did not. Without this,
+  /// "I never got an alert" is unanswerable.
+  notified    Boolean @default(false)
+  notifyError String?
+
+  createdAt DateTime @default(now())
+
+  actor  User?   @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  domain Domain? @relation(fields: [domainId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([event, createdAt])
+  @@map("activity_log")
+}
+
+/// Application settings: one row, for things that are not about a domain.
+model AppSettings {
+  id String @id @default("default")
+
+  /// The SMTP server the portal sends its own mail through. Separate from any
+  /// domain's mail settings: those belong to a customer, this is yours.
+  smtpHost     String?
+  smtpPort     Int?
+  smtpSecure   Boolean @default(true)
+  smtpUser     String?
+  /// Encrypted at rest, never returned to the browser.
+  smtpPassword String?
+  fromAddress  String?
+  fromName     String?
+
+  /// Where alerts go. Comma separated, so more than one person can be told.
+  notifyEmails String?
+
+  /// The master switch, and one per area so a noisy one can be silenced
+  /// without losing the rest.
+  notifyEnabled   Boolean @default(false)
+  notifyDns       Boolean @default(true)
+  notifyEmailMgmt Boolean @default(true)
+  notifyFiles     Boolean @default(true)
+  notifyDatabase  Boolean @default(true)
+  notifyUsers     Boolean @default(true)
+  notifySettings  Boolean @default(true)
+  notifyOrders    Boolean @default(true)
+  notifySecurity  Boolean @default(true)
+
+  updatedAt DateTime @updatedAt
+
+  @@map("app_settings")
 }

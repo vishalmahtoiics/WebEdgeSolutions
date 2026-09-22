@@ -6,6 +6,7 @@ import { prisma } from '../db.js';
 import { validate } from '../middleware/validate.js';
 import { requireAuth } from '../middleware/auth.js';
 import { asyncHandler, unauthorized, HttpError } from '../lib/errors.js';
+import { record } from '../services/notifier.js';
 import { config } from '../config.js';
 
 export const authRouter = Router();
@@ -36,8 +37,30 @@ authRouter.post(
     const hash = user?.passwordHash || '$2a$10$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidi';
     const ok = await bcrypt.compare(password, hash);
 
-    if (!user || !ok) throw unauthorized('Incorrect email or password.');
-    if (!user.isActive) throw unauthorized('This account has been disabled.');
+    if (!user || !ok) {
+      // A failed sign-in is the one alert worth having even when nothing
+      // changed: somebody trying passwords against your portal is the thing
+      // you want to hear about first. The address tried is recorded; the
+      // password never is.
+      await record({
+        event: 'security.signin.failed',
+        summary: `Failed sign-in for ${email}`,
+        detail: user
+          ? 'The account exists and the password was wrong.'
+          : 'No account with that address.',
+        ip: req.ip,
+      });
+      throw unauthorized('Incorrect email or password.');
+    }
+
+    if (!user.isActive) {
+      await record({
+        event: 'security.signin.disabled',
+        summary: `Disabled account ${email} tried to sign in`,
+        ip: req.ip,
+      });
+      throw unauthorized('This account has been disabled.');
+    }
 
     // A Secure cookie sent over plain HTTP is silently discarded by the
     // browser: the sign-in would return 200 and then bounce straight back to

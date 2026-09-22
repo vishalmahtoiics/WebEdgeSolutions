@@ -52,6 +52,13 @@ const admin = client();
 const member = client();
 const ctx = {};
 
+/// `Connection: close` on every request is not decoration.
+///
+/// Node's fetch keeps sockets alive between calls. Killing the spawned server
+/// in `after` then resets them, and that reset surfaces as an uncaughtException
+/// attributed to the `before` hook that opened them — failing the whole file
+/// after every test in it has already passed. Closing each connection leaves
+/// nothing to reset.
 function client() {
   let cookie = '';
   return async function call(pathname, { method = 'GET', body } = {}) {
@@ -60,6 +67,8 @@ function client() {
       headers: {
         ...(body ? { 'Content-Type': 'application/json' } : {}),
         ...(cookie ? { Cookie: cookie } : {}),
+        // See the note above `client`.
+        Connection: 'close',
       },
       body: body ? JSON.stringify(body) : undefined,
     });
@@ -79,6 +88,19 @@ function client() {
 const write = async (file, content) => {
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, content);
+};
+
+/// Swallows connection resets on a test stub.
+///
+/// The portal keeps connections alive to these servers, and killing it at the
+/// end of the run resets them. Without a handler, that reset surfaces as an
+/// uncaughtException and fails the whole file — after every test in it has
+/// already passed.
+const ignoreResets = (server) => {
+  server.on('clientError', () => {});
+  server.on('error', () => {});
+  server.on('connection', (socket) => socket.on('error', () => {}));
+  return server;
 };
 
 test.before(async () => {
@@ -131,6 +153,7 @@ test.before(async () => {
   const ftpPort = ftpServer.server.address().port;
 
   siteServer = http.createServer((req, res) => respond(req, res));
+  ignoreResets(siteServer);
   await new Promise((r) => siteServer.listen(0, '127.0.0.1', r));
   sitePort = siteServer.address().port;
 
@@ -140,7 +163,7 @@ test.before(async () => {
   });
   for (let i = 0; i < 80; i += 1) {
     try {
-      if ((await fetch(`${BASE}/api/health`)).ok) break;
+      if ((await fetch(`${BASE}/api/health`, { headers: { Connection: 'close' } })).ok) break;
     } catch {
       await new Promise((r) => setTimeout(r, 250));
     }

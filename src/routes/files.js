@@ -11,6 +11,7 @@ import { prisma } from '../db.js';
 import { validate } from '../middleware/validate.js';
 import { asyncHandler, badRequest, notFound } from '../lib/errors.js';
 import { decryptMaybe } from '../lib/crypto.js';
+import { record } from '../services/notifier.js';
 import {
   withStorage,
   resolvePath,
@@ -236,6 +237,18 @@ filesRouter.post(
       if (req.body.type === 'directory') await storage.removeDir(absolute);
       else await storage.removeFile(absolute);
     });
+
+    await record({
+      event: 'files.deleted',
+      actor: req.user,
+      domain: req.domain,
+      summary: `Deleted ${req.body.type === 'directory' ? 'the folder' : 'the file'} ${req.body.path}`,
+      detail:
+        req.body.type === 'directory'
+          ? 'A folder was removed from the site, with everything inside it.'
+          : null,
+    });
+
     res.json({ ok: true, message: 'Deleted.' });
   }),
 );

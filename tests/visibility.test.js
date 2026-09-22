@@ -55,7 +55,13 @@ function client() {
   return async function call(path, { method = 'GET', body } = {}) {
     const res = await fetch(`${BASE}/api${path}`, {
       method,
-      headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(cookie ? { Cookie: cookie } : {}) },
+      headers: {
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+        ...(cookie ? { Cookie: cookie } : {}),
+        // Closed so no keep-alive socket is left to reset when the spawned
+        // server is killed at the end of the run.
+        Connection: 'close',
+      },
       body: body ? JSON.stringify(body) : undefined,
     });
     const set = res.headers.get('set-cookie');
@@ -83,7 +89,7 @@ test.before(async () => {
   });
   for (let i = 0; i < 80; i += 1) {
     try {
-      if ((await fetch(`${BASE}/api/health`)).ok) break;
+      if ((await fetch(`${BASE}/api/health`, { headers: { Connection: 'close' } })).ok) break;
     } catch {
       await new Promise((r) => setTimeout(r, 250));
     }

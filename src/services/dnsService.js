@@ -18,6 +18,7 @@ import { prisma } from '../db.js';
 import { HttpError, badRequest } from '../lib/errors.js';
 import { ZoneError } from '../lib/dnsZone.js';
 import { loadProviderWithToken } from './providerService.js';
+import { record } from './notifier.js';
 
 /// The provider connection for a domain whose zone can actually be written,
 /// or null when changes can only be local.
@@ -83,7 +84,7 @@ const ttlNote = (count) =>
 
 // ---------------------------------------------------------------------------
 
-export async function createRecord(domain, input) {
+export async function createRecord(domain, input, actor) {
   const live = await liveZone(domain);
 
   if (!live) {
@@ -109,13 +110,21 @@ export async function createRecord(domain, input) {
   }
 
   await storeZone(domain.id, result.records);
+  await record({
+    event: 'dns.record.created',
+    actor,
+    domain,
+    summary: `Added a ${input.type} record to the live DNS zone`,
+    detail: `${input.name} ${input.type} → ${input.content} (TTL ${input.ttl})`,
+  });
+
   return {
     live: true,
     message: `Added ${describe(input)} to the live DNS zone.${ttlNote(result.ttlAffected)}`,
   };
 }
 
-export async function updateRecord(domain, existing, input) {
+export async function updateRecord(domain, existing, input, actor) {
   // A hand-entered record is not in the zone, so there is nothing upstream to
   // change — whatever the domain is linked to.
   const live = existing.isFromProvider ? await liveZone(domain) : null;
@@ -152,13 +161,23 @@ export async function updateRecord(domain, existing, input) {
   }
 
   await storeZone(domain.id, result.records);
+  await record({
+    event: 'dns.record.updated',
+    actor,
+    domain,
+    summary: `Changed a ${input.type} record in the live DNS zone`,
+    detail:
+      `Was: ${existing.name} ${existing.type} → ${existing.content}\n` +
+      `Now: ${input.name} ${input.type} → ${input.content} (TTL ${input.ttl})`,
+  });
+
   return {
     live: true,
     message: `Updated ${describe(input)} in the live DNS zone.${ttlNote(result.ttlAffected)}`,
   };
 }
 
-export async function deleteRecord(domain, existing) {
+export async function deleteRecord(domain, existing, actor) {
   const live = existing.isFromProvider ? await liveZone(domain) : null;
 
   if (!live) {
@@ -184,6 +203,18 @@ export async function deleteRecord(domain, existing) {
   }
 
   await storeZone(domain.id, result.records);
+  await record({
+    event: 'dns.record.deleted',
+    actor,
+    domain,
+    // MX and NS deletions are the ones that take mail or the whole domain
+    // offline, so they say so in the subject line rather than in the body.
+    summary: ['MX', 'NS'].includes(existing.type)
+      ? `Deleted a ${existing.type} record from the live DNS zone — this can break ${existing.type === 'MX' ? 'email' : 'the domain'}`
+      : `Deleted a ${existing.type} record from the live DNS zone`,
+    detail: `${existing.name} ${existing.type} → ${existing.content}`,
+  });
+
   return { live: true, message: `Removed ${describe(existing)} from the live DNS zone.` };
 }
 

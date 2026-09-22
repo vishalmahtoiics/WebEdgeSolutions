@@ -33,6 +33,13 @@ const ctx = {};
 /// Settings are one shared row, so whatever was there is put back afterwards.
 let originalSettings = null;
 
+/// `Connection: close` on every request is not decoration.
+///
+/// Node's fetch keeps sockets alive between calls. Killing the spawned server
+/// in `after` then resets them, and that reset surfaces as an uncaughtException
+/// attributed to the `before` hook that opened them — failing the whole file
+/// after every test in it has already passed. Closing each connection leaves
+/// nothing to reset.
 function client() {
   let cookie = '';
   return async function call(pathname, { method = 'GET', body } = {}) {
@@ -41,6 +48,8 @@ function client() {
       headers: {
         ...(body ? { 'Content-Type': 'application/json' } : {}),
         ...(cookie ? { Cookie: cookie } : {}),
+        // See the note above `client`.
+        Connection: 'close',
       },
       body: body ? JSON.stringify(body) : undefined,
     });
@@ -76,7 +85,7 @@ test.before(async () => {
   });
   for (let i = 0; i < 80; i += 1) {
     try {
-      if ((await fetch(`${BASE}/api/health`)).ok) break;
+      if ((await fetch(`${BASE}/api/health`, { headers: { Connection: 'close' } })).ok) break;
     } catch {
       await new Promise((r) => setTimeout(r, 250));
     }

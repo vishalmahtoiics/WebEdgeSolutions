@@ -22,6 +22,7 @@ import {
   DatabaseError, MAX_ROWS, DEFAULT_PER_PAGE,
 } from '../lib/database.js';
 import { SqlError, KIND } from '../lib/sqlStatement.js';
+import { record } from '../services/notifier.js';
 
 export const databaseRouter = Router({ mergeParams: true });
 
@@ -51,6 +52,20 @@ async function logStatement({ domainId, userId, sql, kind, verb, target }) {
   return prisma.databaseQueryLog
     .create({ data: { domainId, userId, sql: sql.slice(0, 4000), kind, verb, target: target || null } })
     .catch(() => null);
+}
+
+/// Alerts on a statement that changed data. Only the destructive and
+/// structural ones by default — an alert for every INSERT would bury the DROP
+/// that actually mattered.
+async function alertOnStatement(req, { kind, verb, target, sql }) {
+  if (kind !== KIND.DESTRUCTIVE && kind !== KIND.SCHEMA) return;
+  await record({
+    event: 'database.statement.destructive',
+    actor: req.user,
+    domain: req.domain,
+    summary: `Ran a ${verb.toUpperCase()} on the database${target ? ` (${target})` : ''}`,
+    detail: sql.slice(0, 500),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -179,6 +194,10 @@ databaseRouter.post(
       allowWrites: settings.allowWrites,
       confirmTarget: req.body.confirmTarget,
     });
+
+    if (verdict.ok) {
+      await alertOnStatement(req, { ...verdict, sql: req.body.sql });
+    }
 
     res.json({
       ...result,

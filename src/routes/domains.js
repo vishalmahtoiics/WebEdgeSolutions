@@ -9,6 +9,7 @@ import { encrypt, decryptMaybe, tokenHint } from '../lib/crypto.js';
 import { loadProviderWithToken } from '../services/providerService.js';
 import { syncDnsRecords, syncEmailAccounts, refreshDomain } from '../services/syncService.js';
 import { detectAndStore } from '../services/technologyService.js';
+import { record } from '../services/notifier.js';
 import {
   createRecord as createDnsRecord,
   updateRecord as updateDnsRecord,
@@ -435,6 +436,18 @@ domainsRouter.put(
       create: { domainId: req.domain.id, ...data },
       update: data,
     });
+
+    // Named rather than dumped: the values include hosts and usernames, and an
+    // alert that repeats them is an alert that leaks them into an inbox.
+    const changed = Object.keys(req.body).filter((k) => req.body[k] !== undefined && req.body[k] !== '');
+    await record({
+      event: 'settings.domain.updated',
+      actor: req.user,
+      domain: req.domain,
+      summary: `Changed the connection settings for ${req.domain.name}`,
+      detail: changed.length ? `Fields changed: ${changed.join(', ')}` : null,
+    });
+
     res.json({ settings: presentSettings(settings) });
   }),
 );
@@ -474,7 +487,7 @@ domainsRouter.post(
   withDomain(),
   validate(dnsSchema),
   asyncHandler(async (req, res) => {
-    const result = await createDnsRecord(req.domain, req.body);
+    const result = await createDnsRecord(req.domain, req.body, req.user);
     res.status(201).json(result);
   }),
 );
@@ -488,7 +501,7 @@ domainsRouter.put(
       where: { id: req.params.recordId, domainId: req.domain.id },
     });
     if (!existing) throw notFound('DNS record not found.');
-    res.json(await updateDnsRecord(req.domain, existing, req.body));
+    res.json(await updateDnsRecord(req.domain, existing, req.body, req.user));
   }),
 );
 
@@ -500,7 +513,7 @@ domainsRouter.delete(
       where: { id: req.params.recordId, domainId: req.domain.id },
     });
     if (!existing) throw notFound('DNS record not found.');
-    res.json(await deleteDnsRecord(req.domain, existing));
+    res.json(await deleteDnsRecord(req.domain, existing, req.user));
   }),
 );
 
@@ -665,6 +678,13 @@ domainsRouter.post(
       },
     });
 
+    await record({
+      event: 'email.mailbox.created',
+      actor: req.user,
+      domain,
+      summary: `Created the mailbox ${email.address}`,
+    });
+
     res.status(201).json({
       email: presentEmailAccount(email, isAdmin(req.user)),
       message: `${email.address} created at the provider.`,
@@ -697,6 +717,14 @@ domainsRouter.post(
     } catch (err) {
       throw new HttpError(err.status && err.status < 500 ? 400 : 502, err.message);
     }
+
+    await record({
+      event: 'email.mailbox.password',
+      actor: req.user,
+      domain: req.domain,
+      summary: `Changed the password for ${mailbox.address}`,
+      detail: 'Anyone still signed in to that mailbox elsewhere will be asked for the new password.',
+    });
 
     res.json({ ok: true, message: `Password changed for ${mailbox.address}.` });
   }),
@@ -733,6 +761,14 @@ domainsRouter.delete(
     // Only drop the local row once the provider has confirmed the deletion,
     // so a failure leaves the portal still showing what really exists.
     await prisma.emailAccount.delete({ where: { id: mailbox.id } });
+    await record({
+      event: 'email.mailbox.destroyed',
+      actor: req.user,
+      domain: req.domain,
+      summary: `Permanently deleted the mailbox ${mailbox.address}`,
+      detail: 'This removed the mailbox and everything in it at the provider. It cannot be undone.',
+    });
+
     res.json({ ok: true, message: `${mailbox.address} was permanently deleted at the provider.` });
   }),
 );

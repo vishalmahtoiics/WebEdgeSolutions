@@ -123,6 +123,7 @@ Point your platform's health check at `/api/health`, which returns
 | `SESSION_SECRET` | yes | Signs session cookies. Generate with `openssl rand -hex 32`. |
 | `ENCRYPTION_KEY` | yes | 64 hex characters (32 bytes) used to encrypt provider API tokens at rest. Generate with `openssl rand -hex 32`. |
 | `PORT` | no | Defaults to `3000`. |
+| `NOTIFY_BURST_LIMIT` | no | Alerts allowed per ten minutes before the rest are summarised. Defaults to `30`. |
 | `NODE_ENV` | no | Set to `production` when deploying. |
 | `SECURE_COOKIES` | no | Set to `true` when serving over HTTPS. |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NAME` | no | Used to create the first Super Admin on seed/first boot. |
@@ -665,6 +666,63 @@ it did not load.
 
 ---
 
+## Change alerts
+
+**Alerts & Activity** in the portal tells you by email whenever somebody changes
+something. Set your own SMTP server there, say who to tell, and choose which
+areas are worth hearing about.
+
+| Area | What triggers it |
+| --- | --- |
+| DNS | A record added, changed or deleted **in a live zone**. A portal-only note is not a change to the internet, so it is not alerted on. |
+| Mailboxes | A mailbox created or permanently deleted, or its password changed. |
+| Files | A file or folder deleted through the file manager. |
+| Database | A `DROP`, `TRUNCATE` or other statement that changes structure. Not every `INSERT` — that would bury the one that mattered. |
+| Accounts | A portal account created or deleted. |
+| Settings | Connection details changed, or these notification settings changed. |
+| Orders | A new order from the public site, or a customer reporting a payment. |
+| Sign-in failures | Somebody trying passwords against your portal. |
+
+Subjects are written to be read on a phone: *"Deleted a MX record from the live
+DNS zone — this can break email on example.com"* says the consequence before you
+have opened anything.
+
+### An alert never costs you the action
+
+A change is written to the activity log **first** and emailed **second**, in the
+background, after the response has already gone out. Nothing on the email side
+can travel back into the request. So:
+
+- A mail server that is down, slow, or rejecting costs you the alert — never the
+  record, and never the action. Somebody deleting a DNS record does not see an
+  error because an SMTP host stopped answering. There is a test that points the
+  portal at a server which refuses every connection and checks the work still
+  happens.
+- Nobody waits through an SMTP handshake to find out their file saved.
+- When a send fails, the reason is stored on the entry and the page shows a
+  count of undelivered alerts — so *"I never got an email"* has an answer.
+
+### The activity log is the product
+
+Email is one way of reading it. The log works whether or not a mail server is
+ever configured, records who did what in words (so an entry still reads
+correctly after that account is deleted), and can be filtered by area.
+
+### Bounds
+
+At most 30 alerts go out in any ten minutes; past that one message says how many
+are being held back, and everything is still recorded. Raise it with
+`NOTIFY_BURST_LIMIT` if your portal is busier than that. A test email is limited
+to 10 per ten minutes, because it sends real mail through somebody's server.
+
+> Failed sign-ins record the address that was tried. The password never is —
+> not in the log, not in the email.
+
+> The SMTP password is encrypted at rest and never sent to the browser, which
+> only learns that one is stored.
+
+---
+
 ## Roles and access
 
 **Super Admin** manages everything: providers, all domains, users, and resource
@@ -772,7 +830,7 @@ src/
   middleware/          Authentication, authorization, validation
   providers/           Pluggable provider adapters (hostinger.js)
   routes/              API endpoints
-  services/            Provider credentials and sync logic
+  services/            Provider credentials, sync, store, notifications
 public-store/          The public storefront, served at /
   index.html           Shell
   css/store.css        Styles

@@ -104,7 +104,7 @@ test.before(async () => {
   });
   for (let i = 0; i < 80; i += 1) {
     try {
-      if ((await fetch(`${BASE}/api/health`)).ok) break;
+      if ((await fetch(`${BASE}/api/health`, { headers: { Connection: 'close' } })).ok) break;
     } catch {
       await new Promise((r) => setTimeout(r, 250));
     }
