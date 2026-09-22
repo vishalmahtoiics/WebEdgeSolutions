@@ -22,6 +22,10 @@ const userEmail = `mailuser+${stamp}@example.com`;
 const userPassword = 'MailUser@12345';
 
 // Stub state, so deletes and creates are observable.
+/// The body of the last create the stub accepted, so a test can assert the
+/// shape actually sent rather than only that something worked.
+let lastCreateBody = null;
+
 let mailboxes = [
   { id: 'mb_1', address: `info@${DOMAIN}`, status: 'active', usage: { storageQuota: 10485760, storageUsed: 524288 } },
 ];
@@ -79,11 +83,31 @@ test.before(async () => {
       let raw = '';
       req.on('data', (c) => { raw += c; });
       return req.on('end', () => {
-        const { localPart, password } = JSON.parse(raw || '{}');
+        const body = JSON.parse(raw || '{}');
+
+        // The real API wants `local_part`, with an underscore, and says so
+        // plainly when it does not get it. This stub insisted on nothing for
+        // a while, having been written from the same code it was meant to
+        // check — so it agreed with a misspelling and every test passed while
+        // creating a mailbox failed against Hostinger. It now refuses exactly
+        // as the real one does, with the real wording.
+        const localPart = body.local_part;
+        if (!localPart) {
+          res.writeHead(422, { 'Content-Type': 'application/json' });
+          return res.end(
+            JSON.stringify({
+              message: 'The given data was invalid. The local part field is required.',
+              errors: { local_part: ['The local part field is required.'] },
+            }),
+          );
+        }
+
+        const { password } = body;
         if (!password || password.length < 8) {
           res.writeHead(422, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ message: 'Validation failed', errors: { password: ['Password is too weak.'] } }));
         }
+        lastCreateBody = body;
         const created = { id: `mb_${mailboxes.length + 1}`, address: `${localPart}@${DOMAIN}`, status: 'active', usage: { storageQuota: 10485760, storageUsed: 0 } };
         mailboxes.push(created);
         res.writeHead(201, { 'Content-Type': 'application/json' });
@@ -179,6 +203,21 @@ test('creating a mailbox provisions it at the provider', async () => {
   assert.equal(res.data.email.isFromProvider, true);
   assert.ok(res.data.email.externalId, 'the provider id must be stored so it can be managed later');
   assert.ok(mailboxes.some((m) => m.address === `support@${DOMAIN}`), 'it should exist at the provider');
+});
+
+test('the create request sends local_part, the field the API actually wants', () => {
+  // This was `localPart` for a while. Every test here passed, because the
+  // stub had been written from the same code and so agreed with the
+  // misspelling; the real API answered "The local part field is required"
+  // every single time. The assertion is on the wire format rather than on the
+  // outcome, because the outcome is exactly what was not enough.
+  assert.ok(lastCreateBody, 'a mailbox should have been created by now');
+  assert.equal(lastCreateBody.local_part, 'support');
+  assert.ok(!('localPart' in lastCreateBody), 'camelCase would be silently ignored and the address lost');
+  // The domain is not sent: it comes from the mail order the request is
+  // addressed to.
+  assert.ok(!('address' in lastCreateBody), 'the API takes the local part alone');
+  assert.ok(!('domain' in lastCreateBody));
 });
 
 test('the address must belong to the domain being managed', async () => {

@@ -1097,6 +1097,14 @@ single file during development is still quick:
 npm run test:file tests/billing.test.js
 ```
 
+> **A stub can only be as honest as whoever wrote it.** Creating a mailbox
+> sent `localPart` where Hostinger wants `local_part`; every test passed,
+> because the stub had been written from the same code and agreed with the
+> mistake, while the real API answered *"The local part field is required"*
+> every time. The stubs now refuse the wrong field name with the real API's
+> own wording, and the tests assert on the body that goes over the wire rather
+> than only on the outcome — the outcome is exactly what was not enough.
+
 **What runs against something real, and what runs against a stub:**
 
 | Suite | Runs against |
@@ -1105,7 +1113,7 @@ npm run test:file tests/billing.test.js
 | Webmail and the mail app | A real IMAP server (`hoodiecrow-imap`) and a real SMTP server (`smtp-server`) |
 | Technology detection | A real FTP server holding real WordPress, Laravel, Next.js, static and PHP trees, plus a real HTTP server serving the markup those platforms send |
 | Database | A real MySQL or MariaDB server |
-| Hostinger adapter, sync, DNS writes | A local stub serving Hostinger's documented response shapes |
+| Hostinger adapter, sync, DNS writes | A local stub serving Hostinger's documented response shapes, and insisting on the request shapes the real API requires |
 | Deploys | A real FTP server, with genuinely hostile archives built in the test itself — a Zip Slip entry, a zip bomb, a symlink pointing at the filesystem root |
 | Change alerts, support tickets, expiry reminders | A real SMTP server (`smtp-server`), with the messages parsed and read back |
 | Two-factor codes | The RFC 6238 test vectors, so every authenticator app agrees with us |

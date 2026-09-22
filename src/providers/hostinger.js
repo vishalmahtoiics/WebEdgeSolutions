@@ -296,11 +296,19 @@ export const hostingerAdapter = {
 
   /// Creates a mailbox on the domain's mail plan.
   /// `localPart` is the piece before the @; the domain comes from the order.
+  ///
+  /// The field is `local_part`, with an underscore. This was sent as
+  /// `localPart` for a while and the API answered "The local part field is
+  /// required" every time — a good error, and one no test here could have
+  /// produced, because the stub it runs against was written from this same
+  /// code and so agreed with the mistake. The stub now insists on the
+  /// underscore, which is the only way a test can hold this end of the
+  /// contract honest.
   async createMailbox(token, domainName, { localPart, password }) {
     const order = await findMailOrder(token, domainName);
     const created = await request(token, `/api/mail/v1/orders/${encodeURIComponent(order.id)}/mailboxes`, {
       method: 'POST',
-      body: { localPart, password },
+      body: { local_part: localPart, password },
     });
     const data = created?.data && typeof created.data === 'object' ? created.data : created;
     return data?.address ? toMailbox(data) : { address: `${localPart}@${domainName}`, status: 'active', externalId: data?.id != null ? String(data.id) : null };
@@ -460,8 +468,13 @@ export const hostingerAdapter = {
   async checkDomainAvailability(token, { name, tlds }) {
     const body = await request(token, '/api/domains/v1/availability', {
       method: 'POST',
-      body: { domain: name, tlds, withAlternatives: false },
+      // Snake case, like `local_part` on the mail endpoints — this API is
+      // consistent about it, and camel case there was answered with "the
+      // local part field is required" rather than being quietly ignored.
+      body: { domain: name, tlds, with_alternatives: false },
     });
+
+    const wanted = new Set((tlds || []).map((t) => String(t).replace(/^\./, '').toLowerCase()));
 
     const rows = unwrap(body);
     return rows
@@ -478,7 +491,12 @@ export const hostingerAdapter = {
           restriction: row?.restriction || row?.reason || null,
         };
       })
-      .filter((r) => r.domain);
+      .filter((r) => r.domain)
+      // Only the endings that were asked about. If the flag above is ever
+      // ignored or renamed, the registry's suggestions get dropped here
+      // instead of appearing as endings nobody searched for — which makes
+      // this correct whatever that field is called.
+      .filter((r) => !wanted.size || !r.tld || wanted.has(String(r.tld).toLowerCase()));
   },
 
   /// VPS instances on the account, shown read-only in the Super Admin area.

@@ -52,6 +52,9 @@ const freshZone = () => [
 /// read-back exists to catch.
 let swallowWrites = false;
 let availability = [];
+/// The body of the last availability request, so a test can assert the shape
+/// that actually went on the wire.
+let lastAvailabilityBody = null;
 let lastPutBody = null;
 
 let stub;
@@ -153,7 +156,7 @@ test.before(async () => {
     }
 
     if (path === '/api/domains/v1/availability' && req.method === 'POST') {
-      await readBody(req);
+      lastAvailabilityBody = await readBody(req);
       return send(200, availability);
     }
 
@@ -529,6 +532,40 @@ test('availability comes back per ending, exactly as the registry answered', asy
     [['mysite.com', false], ['mysite.in', true], ['mysite.net', true]],
   );
   assert.equal(res.data.results[2].restriction, 'premium');
+});
+
+test('the availability request is sent in the shape this API uses', () => {
+  // Snake case, like local_part on the mail endpoints. Getting that one wrong
+  // was answered with "the local part field is required" rather than being
+  // ignored, so the convention is worth holding to across the adapter.
+  assert.ok(lastAvailabilityBody, 'availability should have been asked for by now');
+  assert.equal(lastAvailabilityBody.domain, 'mysite');
+  assert.deepEqual(lastAvailabilityBody.tlds, ['com', 'in', 'net']);
+  assert.equal(lastAvailabilityBody.with_alternatives, false);
+  assert.ok(!('withAlternatives' in lastAvailabilityBody));
+});
+
+test('endings nobody asked about are dropped, whatever the registry volunteers', async () => {
+  // The registry suggests alternatives when it feels like it. Filtering here
+  // means the flag above being ignored or renamed shows up as nothing at all,
+  // rather than as endings appearing in somebody's search results.
+  availability = [
+    { domain: 'mysite.com', tld: 'com', isAvailable: false },
+    { domain: 'mysite.xyz', tld: 'xyz', isAvailable: true },
+    { domain: 'mysite-online.com', tld: 'com', isAvailable: true },
+  ];
+
+  const res = await admin('/domains/availability', {
+    method: 'POST',
+    body: { name: 'mysite', tlds: ['com'] },
+  });
+
+  assert.equal(res.status, 200);
+  assert.ok(
+    !res.data.results.some((r) => r.tld === 'xyz'),
+    'an ending nobody searched for must not appear',
+  );
+  assert.ok(res.data.results.some((r) => r.domain === 'mysite.com'));
 });
 
 test('a registry that does not say is reported as unknown, never as available', async () => {
