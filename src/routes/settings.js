@@ -68,6 +68,14 @@ const settingsSchema = z.object({
     )
     .optional(),
 
+  // The mail server names customers are given, portal-wide. Empty means they
+  // are told the provider's real hostnames, which is the old behaviour and a
+  // legitimate choice.
+  publicImapHost: z.string().trim().max(255).optional(),
+  publicImapPort: z.coerce.number().int().min(1).max(65535).nullish(),
+  publicSmtpHost: z.string().trim().max(255).optional(),
+  publicSmtpPort: z.coerce.number().int().min(1).max(65535).nullish(),
+
   notifyEnabled: z.coerce.boolean().optional(),
   notifyDns: z.coerce.boolean().optional(),
   notifyEmailMgmt: z.coerce.boolean().optional(),

@@ -256,12 +256,34 @@ model DomainSettings {
   ftpRootPath String?
 
   // Mail servers, shared by every mailbox on the domain.
+  //
+  // These are what the portal connects to. They are the provider's real
+  // hostnames, so they are Super Admin's to see and nobody else's.
   imapHost   String?
   imapPort   Int?
   imapSecure Boolean @default(true)
   smtpHost   String?
   smtpPort   Int?
   smtpSecure Boolean @default(true)
+
+  /// What a customer is told to type into Outlook, which is not always the
+  /// same thing. Three choices, because all three are real:
+  ///
+  ///   STANDARD — whatever the portal-wide setup settings say. The usual case.
+  ///   REAL     — hand out the provider's own hostnames above, unchanged. For
+  ///              a domain the standard hostnames cannot serve.
+  ///   CUSTOM   — hostnames just for this domain, typed in below.
+  ///
+  /// STANDARD with nothing configured portal-wide falls back to REAL, because
+  /// the one thing this must never do is hand somebody a hostname that does
+  /// not answer.
+  mailSetupMode String @default("STANDARD")
+
+  /// Used only when mailSetupMode is CUSTOM.
+  publicImapHost String?
+  publicImapPort Int?
+  publicSmtpHost String?
+  publicSmtpPort Int?
 
   /// MySQL / MariaDB access. The provider API does not hand these out, so they
   /// are entered by hand, the same way FTP is. The password is encrypted at
@@ -645,6 +667,25 @@ model AppSettings {
 
   /// Where alerts go. Comma separated, so more than one person can be told.
   notifyEmails String?
+
+  // -------------------------------------------------------------------------
+  // The mail server names customers are given.
+  //
+  // Set these once and every domain hands out the same pair, under your own
+  // name rather than the provider's. Leaving them empty is a valid choice: it
+  // means customers are told the provider's real hostnames, which is what
+  // happened before any of this existed.
+  //
+  // These must point at something that actually answers on those ports with a
+  // certificate valid for that name — usually a TLS proxy of your own in front
+  // of the provider's mail servers. A name that resolves but presents somebody
+  // else's certificate is worse than no name at all: the mail client shows a
+  // warning with the real hostname printed in it.
+  // -------------------------------------------------------------------------
+  publicImapHost String?
+  publicImapPort Int?
+  publicSmtpHost String?
+  publicSmtpPort Int?
 
   /// The master switch, and one per area so a noisy one can be silenced
   /// without losing the rest.

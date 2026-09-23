@@ -52,7 +52,7 @@ const KIND_LABEL = {
 export function databasePanel(domain, settings) {
   const host = el('div');
 
-  if (!settings?.dbHost || !settings?.dbName) {
+  if (!settings?.hasDatabase) {
     return el(
       'div',
       { class: 'card' },

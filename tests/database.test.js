@@ -609,11 +609,16 @@ live('a user cannot reach a database on a domain they are not assigned', async (
 live('a user cannot turn writes on for themselves', async () => {
   await allowWrites(false);
 
+  // This used to be allowed through with the one field quietly dropped. The
+  // whole settings row is an administrator's now — it holds the provider's
+  // hostnames and the credentials the portal uses on the customer's behalf —
+  // so the request is refused outright, which is a stronger answer to the
+  // same question.
   const attempt = await member(`/domains/${ctx.domainId}/settings`, {
     method: 'PUT',
     body: { dbAllowWrites: true },
   });
-  assert.equal(attempt.status, 200, 'the rest of the settings still save');
+  assert.equal(attempt.status, 403, 'the settings are not a customer\u2019s to write');
 
   const settings = await admin(`/domains/${ctx.domainId}`);
   assert.equal(settings.data.settings.dbAllowWrites, false, 'the switch did not move');
@@ -633,20 +638,30 @@ live('the database password is encrypted and never returned', async () => {
   assert.notEqual(row.dbPassword, DB_PASS, 'must not be stored in the clear');
   assert.equal(row.dbPassword.split(':').length, 3, 'stored as iv:tag:ciphertext');
 
+  // Nobody gets the password. A user does not get the settings row at all
+  // any more, so for them the check is that none of it is there; for an
+  // administrator it is that the column is replaced by a hint.
   for (const who of [admin, member]) {
     const res = await who(`/domains/${ctx.domainId}`);
     assert.ok(!res.text.includes(DB_PASS), 'the password must not appear in any response');
-    // The column itself is gone. Checked as a key rather than as a substring,
-    // because `dbPasswordHint` legitimately contains that text.
     assert.ok(!('dbPassword' in res.data.settings), 'the column is not exposed');
-    assert.equal(res.data.settings.hasDbPassword, true, 'only that one is stored');
-
-    // And the hint reveals a tail only, never the whole secret.
-    const hint = res.data.settings.dbPasswordHint;
-    assert.ok(hint.startsWith('••••'));
-    assert.ok(hint.length <= 8, `the hint is a hint, not the password: ${hint}`);
-    assert.ok(!DB_PASS.startsWith(hint.replace(/•/g, '')));
   }
+
+  const forUser = await member(`/domains/${ctx.domainId}`);
+  assert.deepEqual(
+    Object.keys(forUser.data.settings),
+    ['hasDatabase'],
+    'a customer gets the one fact the page needs and nothing else',
+  );
+
+  const forAdmin = await admin(`/domains/${ctx.domainId}`);
+  assert.equal(forAdmin.data.settings.hasDbPassword, true, 'only that one is stored');
+
+  // And the hint reveals a tail only, never the whole secret.
+  const hint = forAdmin.data.settings.dbPasswordHint;
+  assert.ok(hint.startsWith('••••'));
+  assert.ok(hint.length <= 8, `the hint is a hint, not the password: ${hint}`);
+  assert.ok(!DB_PASS.startsWith(hint.replace(/•/g, '')));
 });
 
 live('a domain with no database set up says so plainly', async () => {

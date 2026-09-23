@@ -1,5 +1,5 @@
 import {
-  api, el, clear, appendAll, field, submitHandler, toast, openModal, confirmModal,
+  api, el, clear, fill, appendAll, field, submitHandler, toast, openModal, confirmModal,
   statusBadge, sourceBadge, techBadge, TECH_SOURCE_LABEL,
   emptyState, errorAlert, formatDate, relativeTime, formatMb, tableView,
 } from '../core.js';
@@ -87,10 +87,13 @@ export async function renderDomainManage({ param, user }) {
     { key: 'deploy', label: 'Deploy' },
     // Only offered where a database is actually configured: an empty tab that
     // exists to tell you it is empty is just noise.
-    ...(data.settings?.dbHost && data.settings?.dbName ? [{ key: 'database', label: 'Database' }] : []),
-    { key: 'settings', label: 'FTP & Server' },
+    ...(data.settings?.hasDatabase ? [{ key: 'database', label: 'Database' }] : []),
   ];
-  if (isAdmin) tabs.push({ key: 'access', label: 'Access' });
+  // FTP & Server holds the provider's real hostnames and the live credentials
+  // the portal uses on the customer's behalf. Files, Database and webmail all
+  // keep working without it — they always ran server-side — and what a
+  // customer actually needs from it is the Email setup card on the Email tab.
+  if (isAdmin) tabs.push({ key: 'settings', label: 'FTP & Server' }, { key: 'access', label: 'Access' });
 
   const tabBar = el('div', { class: 'tabs' });
   const select = (key) => {
@@ -806,10 +809,167 @@ function emailPanel(data, isAdmin) {
   );
 
   panel.append(mailboxCard);
+  // Directly under the mailboxes, because "how do I get this into Outlook" is
+  // asked while looking at them.
+  panel.append(mailSetupCard(data, isAdmin));
   // Forwarders and aliases are shown to admins only: the card describes the
   // provider's own panel.
   if (isAdmin && d.provider && data.capabilities?.emailExtras) panel.append(emailExtrasCard(d));
   return panel;
+}
+
+/// What to type into Outlook, a phone, or anything else that speaks IMAP.
+///
+/// This is the one card on the page written for the person who owns the
+/// mailbox rather than the person who administers it, so it says nothing
+/// about providers or plans — just the handful of things a mail client asks
+/// for.
+///
+/// The server names arrive already resolved from the API. Whether they are
+/// the provider's real ones or your own is decided per domain under FTP &
+/// Server; this card only prints what it was given.
+function mailSetupCard(data, isAdmin) {
+  const setup = data.mailSetup;
+  const d = data.domain;
+
+  if (!setup) {
+    return el(
+      'div',
+      { class: 'card', style: 'margin-top:18px' },
+      el(
+        'div',
+        { class: 'card-head' },
+        el(
+          'div',
+          { class: 'grow' },
+          el('h2', {}, 'Email setup'),
+          el('p', {}, 'For Outlook, phones, and anything else.'),
+        ),
+      ),
+      el(
+        'div',
+        { class: 'card-body' },
+        emptyState(
+          'mail',
+          'Not available yet',
+          isAdmin
+            ? 'Fill in the incoming and outgoing servers under FTP & Server, and these instructions appear here.'
+            : 'Ask your administrator for the mail server settings, or use webmail in the meantime.',
+        ),
+      ),
+    );
+  }
+
+  const example = data.emailAccounts[0]?.address || `you@${d.name}`;
+
+  /// A value somebody is about to retype into another program, so it is
+  /// monospaced, selectable, and has a button that does the typing for them.
+  const copyable = (value) => {
+    const btn = el('button', { class: 'btn sm ghost' }, 'Copy');
+    btn.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(value);
+        btn.textContent = 'Copied';
+        setTimeout(() => {
+          btn.textContent = 'Copy';
+        }, 1600);
+      } catch {
+        // Clipboard access can be refused outright, and the value is on
+        // screen anyway — so say what to do instead of failing silently.
+        toast('Select the text and copy it.', '');
+      }
+    };
+    return el('div', { class: 'setup-value' }, el('span', { class: 'mono break' }, value), btn);
+  };
+
+  const row = (label, value, hint) =>
+    el(
+      'div',
+      { class: 'setup-row' },
+      el('div', { class: 'setup-label' }, label, hint ? el('div', { class: 'small muted' }, hint) : null),
+      copyable(value),
+    );
+
+  const SOURCE_LABEL = { real: 'Real server', standard: 'Standard names', custom: 'Custom for this domain' };
+
+  return el(
+    'div',
+    { class: 'card', style: 'margin-top:18px' },
+    el(
+      'div',
+      { class: 'card-head' },
+      el(
+        'div',
+        { class: 'grow' },
+        el('h2', {}, 'Email setup'),
+        el('p', {}, 'Give these to anyone setting up a mailbox in Outlook, Apple Mail or a phone.'),
+      ),
+      // Only an administrator is told which of the two answers this is. To
+      // the customer it is simply the mail server.
+      isAdmin && setup.source
+        ? el(
+            'span',
+            {
+              class: `badge ${setup.source === 'real' ? (setup.explicit ? 'warn' : 'danger') : 'ok'}`,
+              title:
+                setup.source !== 'real'
+                  ? 'Customers are given your own server names.'
+                  : setup.explicit
+                    ? 'This domain is set to hand out the real mail server, which names the provider.'
+                    : 'Nothing has been configured, so customers are shown nothing at all here.',
+            },
+            setup.source === 'real' && !setup.explicit ? 'Not shown to customers' : SOURCE_LABEL[setup.source] || setup.source,
+          )
+        : null,
+    ),
+    el(
+      'div',
+      { class: 'card-body' },
+      el(
+        'div',
+        { class: 'setup-grid' },
+        row('Email address', example, 'This is the username too'),
+        row('Incoming server (IMAP)', setup.imap.host),
+        row('Incoming port', String(setup.imap.port), 'SSL/TLS'),
+        setup.smtp ? row('Outgoing server (SMTP)', setup.smtp.host) : null,
+        setup.smtp ? row('Outgoing port', String(setup.smtp.port), 'SSL/TLS') : null,
+      ),
+      el(
+        'div',
+        { class: 'small muted', style: 'margin-top:10px' },
+        'The password is the mailbox\u2019s own \u2014 not the one used to sign in here.',
+      ),
+      !setup.smtp
+        ? el(
+            'div',
+            { class: 'alert warn', style: 'margin-top:14px' },
+            el('span', { class: 'strong' }, 'No outgoing server is set. '),
+            'Mail can be received but not sent from a mail client until one is.',
+          )
+        : null,
+      isAdmin && setup.source === 'real' && !setup.explicit
+        ? el(
+            'div',
+            { class: 'alert danger', style: 'margin-top:14px' },
+            el('span', { class: 'strong' }, 'Only you can see this. '),
+            'These are the provider\u2019s own hostnames and nobody chose to hand them out, so customers are shown nothing here at all. Set your own names under Alerts & Activity \u2192 Mail server names, or set this domain to hand out the real server under FTP & Server.',
+          )
+        : null,
+      el(
+        'div',
+        { class: 'alert info', style: 'margin-top:14px' },
+        el('span', { class: 'strong' }, 'Choose SSL/TLS, not STARTTLS. '),
+        'Some clients offer a different port by default and then fail to connect. These two are encrypted from the moment they connect.',
+      ),
+      el(
+        'div',
+        { class: 'small muted', style: 'margin-top:12px' },
+        'Would rather not set anything up? ',
+        el('a', { href: '/mails', target: '_blank', rel: 'noopener' }, 'Open webmail in a browser'),
+        ' and sign in with the same address and password.',
+      ),
+    ),
+  );
 }
 
 /// Forwarders, aliases, autoreplies and catch-alls, read live from the
@@ -906,6 +1066,21 @@ function settingsPanel(data) {
       placeholder: s.hasFtpPassword ? `Saved (${s.ftpPasswordHint}) — leave blank to keep it` : '',
     }),
     ftpRootPath: el('input', { type: 'text', value: s.ftpRootPath || '', placeholder: '/public_html' }),
+    mailSetupMode: el(
+      'select',
+      {},
+      [
+        ['STANDARD', 'The standard names set for this portal'],
+        ['REAL', 'The real mail server above'],
+        ['CUSTOM', 'Names just for this domain'],
+      ].map(([value, label]) =>
+        el('option', { value, selected: (s.mailSetupMode || 'STANDARD') === value }, label),
+      ),
+    ),
+    publicImapHost: el('input', { type: 'text', value: s.publicImapHost || '', placeholder: 'imap.yourbrand.com' }),
+    publicImapPort: el('input', { type: 'number', value: s.publicImapPort ?? '', placeholder: '993', min: 1, max: 65535 }),
+    publicSmtpHost: el('input', { type: 'text', value: s.publicSmtpHost || '', placeholder: 'smtp.yourbrand.com' }),
+    publicSmtpPort: el('input', { type: 'number', value: s.publicSmtpPort ?? '', placeholder: '465', min: 1, max: 65535 }),
     imapHost: el('input', { type: 'text', value: s.imapHost || '', placeholder: 'imap.example.com' }),
     imapPort: el('input', { type: 'number', value: s.imapPort ?? '', placeholder: '993' }),
     smtpHost: el('input', { type: 'text', value: s.smtpHost || '', placeholder: 'smtp.example.com' }),
@@ -1062,11 +1237,97 @@ function settingsPanel(data) {
         mailTest(d),
       ),
     ),
+    customerFacingMailCard(inputs, data),
     el(
       'div',
       { class: 'card' },
       el('div', { class: 'card-head' }, el('h2', {}, 'Notes')),
       el('div', { class: 'card-body' }, inputs.notes, alertHost, el('div', { style: 'margin-top:14px' }, save)),
+    ),
+  );
+}
+
+/// What this domain's customers are told to type in.
+///
+/// Deliberately a separate card from "Mail servers" directly above it, and
+/// worded to keep the two apart: that one is what the portal connects to, this
+/// one is what a customer is given. They are usually different on purpose, and
+/// a single card would invite somebody to change the wrong pair and wonder why
+/// their webmail stopped working.
+function customerFacingMailCard(inputs, data) {
+  const setup = data.mailSetup;
+
+  // Only the fields the chosen mode actually uses, so nothing on screen looks
+  // like it is having an effect when it is not.
+  const customFields = el(
+    'div',
+    {},
+    el('div', { class: 'form-row' }, field('Incoming (IMAP) server', inputs.publicImapHost), field('Port', inputs.publicImapPort)),
+    el('div', { class: 'form-row' }, field('Outgoing (SMTP) server', inputs.publicSmtpHost), field('Port', inputs.publicSmtpPort)),
+  );
+
+  const preview = el('div', { class: 'small muted' });
+
+  const sync = () => {
+    const mode = inputs.mailSetupMode.value;
+    customFields.style.display = mode === 'CUSTOM' ? '' : 'none';
+
+    // What is on screen right now, not what was saved — otherwise changing
+    // the dropdown appears to do nothing until after a save.
+    if (mode === 'CUSTOM') {
+      const host = inputs.publicImapHost.value.trim();
+      fill(
+        preview,
+        host
+          ? `Customers will be told ${host}.`
+          : 'Fill these in, or customers fall back to the standard names.',
+      );
+    } else if (mode === 'REAL') {
+      fill(
+        preview,
+        'Customers will be told the real mail server, which names the provider. Save to apply.',
+      );
+    } else {
+      fill(preview, 'Customers will be told whatever Alerts & Activity \u2192 Mail server names says. Save to apply.');
+    }
+  };
+
+  inputs.mailSetupMode.onchange = sync;
+  inputs.publicImapHost.oninput = sync;
+  sync();
+
+  return el(
+    'div',
+    { class: 'card' },
+    el(
+      'div',
+      { class: 'card-head' },
+      el(
+        'div',
+        { class: 'grow' },
+        el('h2', {}, 'What customers are told'),
+        el('p', {}, 'The server names on the Email setup card, which is what somebody types into Outlook.'),
+      ),
+      setup?.source
+        ? el(
+            'span',
+            { class: `badge ${setup.source === 'real' ? 'warn' : 'ok'}` },
+            setup.source === 'real' ? 'Naming the provider' : 'Your own names',
+          )
+        : null,
+    ),
+    el(
+      'div',
+      { class: 'card-body' },
+      field('Give customers', inputs.mailSetupMode),
+      customFields,
+      preview,
+      el(
+        'div',
+        { class: 'alert', style: 'margin-top:14px' },
+        el('span', { class: 'strong' }, 'Whatever is chosen has to answer on those ports. '),
+        'A name that resolves but presents somebody else\u2019s certificate is worse than the provider\u2019s own name: the mail client shows a security warning with the real hostname printed inside it. Test it from a mail client before handing it to anybody.',
+      ),
     ),
   );
 }

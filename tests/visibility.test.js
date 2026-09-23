@@ -118,9 +118,47 @@ test.before(async () => {
   ctx.userId = created.data.user.id;
   await admin(`/users/${ctx.userId}/domains`, { method: 'PUT', body: { domainIds: [ctx.domainId] } });
   await member('/auth/login', { method: 'POST', body: { email: userEmail, password: userPassword } });
+
+  // Fill in the infrastructure a real domain has. Until this existed the
+  // checks below passed for the wrong reason: the settings row was empty, so
+  // there was no hostname there to leak. Every one of these names the
+  // provider, which is the whole point.
+  await admin(`/domains/${ctx.domainId}/settings`, {
+    method: 'PUT',
+    body: {
+      imapHost: `imap.${PROVIDER_NAME}.com`,
+      imapPort: 993,
+      smtpHost: `smtp.${PROVIDER_NAME}.com`,
+      smtpPort: 465,
+      ftpHost: `ftp.${PROVIDER_NAME}.com`,
+      ftpUsername: 'u123456',
+      ftpProtocol: 'FTP',
+      dbHost: `sql.${PROVIDER_NAME}.com`,
+      dbName: 'shop_db',
+      dbUser: 'shop_user',
+      serverHostname: `srv42.${PROVIDER_NAME}.com`,
+      serverIp: '203.0.113.9',
+      nameservers: `ns1.${PROVIDER_NAME}.com, ns2.${PROVIDER_NAME}.com`,
+    },
+  });
+
+  // One row of portal-wide settings is shared by every suite, so this file
+  // starts from a known state rather than from whatever ran before it.
+  await clearStandardNames();
 });
 
+/// Empties the portal-wide mail server names.
+async function clearStandardNames() {
+  await admin('/settings', {
+    method: 'PUT',
+    body: { publicImapHost: '', publicImapPort: null, publicSmtpHost: '', publicSmtpPort: null },
+  });
+}
+
 test.after(async () => {
+  // Leaving these set would change what every other suite's customers are
+  // shown, which is a confusing way for an unrelated test to fail.
+  await clearStandardNames().catch(() => {});
   if (ctx.userId) await admin(`/users/${ctx.userId}`, { method: 'DELETE' });
   if (ctx.providerId) await admin(`/providers/${ctx.providerId}`, { method: 'DELETE' });
   await prisma.domain.deleteMany({ where: { name: { in: [DOMAIN, HIDDEN] } } });
@@ -236,6 +274,121 @@ test('the admin still sees the provider everywhere they should', async () => {
   assert.equal(detail.data.domain.provider.adapter, 'hostinger');
   assert.equal(typeof detail.data.dnsRecords[0].isFromProvider, 'boolean');
   assert.equal(typeof detail.data.emailAccounts[0].isFromProvider, 'boolean');
+});
+
+// --- The mail servers a customer is told to use -----------------------------
+//
+// The hardest part of the boundary, because this is the one piece of
+// infrastructure a customer genuinely needs: they cannot set up Outlook
+// without a hostname. So it cannot simply be hidden — it has to be replaced.
+
+test('a user is given no server hostnames at all in the settings', async () => {
+  const { data } = await member(`/domains/${ctx.domainId}`);
+  const raw = JSON.stringify(data.settings);
+
+  for (const field of ['imapHost', 'smtpHost', 'ftpHost', 'dbHost', 'dbUser', 'serverHostname', 'nameservers']) {
+    assert.ok(!raw.includes(field), `settings exposed ${field} to a user`);
+  }
+  // What they do get is the one fact the page needs: whether a Database tab
+  // should exist. Hiding that would remove a tab they use.
+  assert.equal(data.settings.hasDatabase, true);
+});
+
+test('a user cannot write the settings either', async () => {
+  // Reading them was the leak; writing them would let a customer break their
+  // own webmail and file manager.
+  const res = await member(`/domains/${ctx.domainId}/settings`, {
+    method: 'PUT',
+    body: { imapHost: 'imap.somewhere-else.test' },
+  });
+  assert.equal(res.status, 403);
+
+  const after = await prisma.domainSettings.findUnique({ where: { domainId: ctx.domainId } });
+  assert.equal(after.imapHost, `imap.${PROVIDER_NAME}.com`, 'and nothing changed');
+});
+
+test('with nothing configured, a customer is shown no setup at all', async () => {
+  // The state every installation is in before anybody configures anything.
+  // Falling back to the provider's own hostname here would break the rule by
+  // default, on day one, without anyone deciding to — so the customer gets
+  // nothing and is told to ask. An administrator who wants the real name
+  // handed out says so per domain, and then it is shown.
+  const { data } = await member(`/domains/${ctx.domainId}`);
+  assert.equal(data.mailSetup, null, 'no hostname is better than the provider\u2019s hostname');
+
+  const forAdmin = await admin(`/domains/${ctx.domainId}`);
+  assert.equal(forAdmin.data.mailSetup.imap.host, `imap.${PROVIDER_NAME}.com`, 'the administrator still sees it');
+  assert.equal(forAdmin.data.mailSetup.source, 'real');
+  assert.equal(forAdmin.data.mailSetup.explicit, false, 'and is told nobody chose this');
+});
+
+test('once standard names are set, no user response names the provider', async () => {
+  await admin('/settings', {
+    method: 'PUT',
+    body: {
+      publicImapHost: 'imap.ourbrand.test',
+      publicImapPort: 993,
+      publicSmtpHost: 'smtp.ourbrand.test',
+      publicSmtpPort: 465,
+    },
+  });
+
+  const { data } = await member(`/domains/${ctx.domainId}`);
+  assert.equal(data.mailSetup.imap.host, 'imap.ourbrand.test');
+  assert.equal(data.mailSetup.smtp.host, 'smtp.ourbrand.test');
+
+  // The whole point, checked the same way as everything else here: as raw
+  // text over every response a user can reach.
+  for (const [label, res] of Object.entries(await userResponses())) {
+    assert.ok(!res.raw.includes(PROVIDER_NAME), `${label} leaked the provider name`);
+  }
+
+  // And the portal still connects to the real one.
+  const forAdmin = await admin(`/domains/${ctx.domainId}`);
+  assert.equal(forAdmin.data.settings.imapHost, `imap.${PROVIDER_NAME}.com`);
+  assert.equal(forAdmin.data.mailSetup.source, 'standard');
+  assert.equal(forAdmin.data.mailSetup.explicit, true);
+});
+
+test('one domain can still be told to hand out the real server', async () => {
+  // Needed wherever the standard names cannot serve a domain. It reveals the
+  // provider, so it is per domain, explicit, and the administrator is shown
+  // that is what it does.
+  await admin(`/domains/${ctx.domainId}/settings`, { method: 'PUT', body: { mailSetupMode: 'REAL' } });
+
+  const forAdmin = await admin(`/domains/${ctx.domainId}`);
+  assert.equal(forAdmin.data.mailSetup.source, 'real');
+  assert.equal(forAdmin.data.mailSetup.imap.host, `imap.${PROVIDER_NAME}.com`);
+
+  const forUser = await member(`/domains/${ctx.domainId}`);
+  assert.equal(
+    forUser.data.mailSetup.imap.host,
+    `imap.${PROVIDER_NAME}.com`,
+    'withheld only when nobody chose it; this was chosen',
+  );
+  assert.equal(forUser.data.mailSetup.source, undefined, 'the customer is not told which answer it is');
+
+  await admin(`/domains/${ctx.domainId}/settings`, { method: 'PUT', body: { mailSetupMode: 'STANDARD' } });
+});
+
+test('one domain can have hostnames of its own', async () => {
+  await admin(`/domains/${ctx.domainId}/settings`, {
+    method: 'PUT',
+    body: {
+      mailSetupMode: 'CUSTOM',
+      publicImapHost: 'mail.just-this-one.test',
+      publicImapPort: 9993,
+      publicSmtpHost: 'mail.just-this-one.test',
+      publicSmtpPort: 9465,
+    },
+  });
+
+  const { data } = await member(`/domains/${ctx.domainId}`);
+  assert.equal(data.mailSetup.imap.host, 'mail.just-this-one.test');
+  assert.equal(data.mailSetup.imap.port, 9993);
+  assert.equal(data.mailSetup.smtp.port, 9465);
+
+  await admin(`/domains/${ctx.domainId}/settings`, { method: 'PUT', body: { mailSetupMode: 'STANDARD' } });
 });
 
 test('a user cannot reach the provider administration at all', async () => {

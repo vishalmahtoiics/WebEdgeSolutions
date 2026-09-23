@@ -9,7 +9,8 @@ import { encrypt, decryptMaybe, tokenHint } from '../lib/crypto.js';
 import { loadProviderWithToken } from '../services/providerService.js';
 import { syncDnsRecords, syncEmailAccounts, refreshDomain } from '../services/syncService.js';
 import { detectAndStore } from '../services/technologyService.js';
-import { record } from '../services/notifier.js';
+import { record, getAppSettings } from '../services/notifier.js';
+import { resolveMailSetup, mayShowToCustomer, MAIL_SETUP_MODES } from '../lib/mailSetup.js';
 import {
   createRecord as createDnsRecord,
   updateRecord as updateDnsRecord,
@@ -194,11 +195,24 @@ domainsRouter.get(
     const adapter = d.provider ? getAdapter(d.provider.adapter) : null;
 
     const admin = isAdmin(req.user);
+
+    // What to put in a mail client. The customer needs this — they cannot set
+    // up Outlook without a hostname — so it is resolved rather than read
+    // straight out of the settings row.
+    //
+    // The one case a customer does not get it is a provider hostname nobody
+    // chose to hand out, which is what an unconfigured portal would otherwise
+    // fall back to. An administrator sees it either way, along with which of
+    // the answers it is, so they can fix it.
+    const setup = resolveMailSetup(d.settings, await getAppSettings());
+    const forCustomer = mayShowToCustomer(setup) ? { ...setup, source: undefined, explicit: undefined } : null;
+
     res.json({
       domain: presentDomainDetail(d, admin),
       // Drives which panels offer a refresh action.
       capabilities: presentCapabilities(adapter?.capabilities, d, admin),
-      settings: presentSettings(d.settings),
+      settings: presentSettings(d.settings, admin),
+      mailSetup: admin ? setup : forCustomer,
       dnsRecords: d.dnsRecords.map((r) => presentDnsRecord(r, admin)),
       emailAccounts: d.emailAccounts.map((m) => presentEmailAccount(m, admin)),
       assignedUsers: admin ? d.assignments.map((a) => a.user) : undefined,
@@ -380,6 +394,13 @@ const settingsSchema = z.object({
   smtpHost: z.string().trim().max(255).optional(),
   smtpPort: z.coerce.number().int().min(1).max(65535).nullish(),
   smtpSecure: z.coerce.boolean().optional(),
+  // What the customer is told to type in, which is a separate decision from
+  // what the portal connects to.
+  mailSetupMode: z.enum(MAIL_SETUP_MODES).optional(),
+  publicImapHost: z.string().trim().max(255).optional(),
+  publicImapPort: z.coerce.number().int().min(1).max(65535).nullish(),
+  publicSmtpHost: z.string().trim().max(255).optional(),
+  publicSmtpPort: z.coerce.number().int().min(1).max(65535).nullish(),
   // Database, entered by hand: the provider API does not hand these out.
   dbHost: z.string().trim().max(255).optional(),
   dbPort: z.coerce.number().int().min(1).max(65535).nullish(),
@@ -397,14 +418,32 @@ const settingsSchema = z.object({
 
 /// Domain settings for the browser. The FTP password is a live credential for
 /// someone else's server, so only a hint of it ever leaves this process.
-function presentSettings(settings) {
+/// Everything in this row is infrastructure: the provider's real hostnames,
+/// the FTP account, the database account. It is Super Admin's to see.
+///
+/// A normal user gets none of it. Not only because the mail and FTP hostnames
+/// name the provider — which is the one thing the portal is careful never to
+/// do — but because these are the credentials that make the Files, Database
+/// and webmail tabs work on their behalf. They do not need them to use those
+/// tabs, and they cannot do anything useful with them except break their own
+/// site. What they do need is the Email setup card, which is built from this
+/// and says only what belongs in a mail client.
+function presentSettings(settings, admin) {
   if (!settings) return settings;
+
+  // Whether a database is set up is not a secret — it decides whether the
+  // Database tab exists — but the host, user and password behind it are. So a
+  // normal user gets the fact and nothing else, and keeps a working tab.
+  const hasDatabase = Boolean(settings.dbHost && settings.dbName);
+  if (!admin) return { hasDatabase };
+
   // Neither password leaves this process. What goes out is whether one is
   // stored and a few characters of it, which is enough to recognise without
   // being enough to use.
   const { ftpPassword, dbPassword, ...rest } = settings;
   return {
     ...rest,
+    hasDatabase,
     hasFtpPassword: Boolean(ftpPassword),
     ftpPasswordHint: ftpPassword ? tokenHint(decryptMaybe(ftpPassword)) : null,
     hasDbPassword: Boolean(dbPassword),
@@ -528,9 +567,14 @@ domainsRouter.post(
   }),
 );
 
+/// Writing these is Super Admin's as well as reading them. They are the
+/// credentials the portal uses on a customer's behalf; a customer changing
+/// them can only break their own Files, Database and webmail tabs, and the
+/// mail hostnames here name the provider.
 domainsRouter.put(
   '/:id/settings',
   withDomain(),
+  requireAdmin,
   validate(settingsSchema),
   asyncHandler(async (req, res) => {
     const data = blankToNull(req.body);
@@ -563,7 +607,7 @@ domainsRouter.put(
       detail: changed.length ? `Fields changed: ${changed.join(', ')}` : null,
     });
 
-    res.json({ settings: presentSettings(settings) });
+    res.json({ settings: presentSettings(settings, isAdmin(req.user)) });
   }),
 );
 

@@ -67,11 +67,105 @@ export async function renderNotifications() {
           'The change is still recorded below — check the SMTP settings and send a test.',
         )
       : null,
+    mailNamesCard(settings),
     settingsCard(settings),
     scheduleCard(settings, jobsResult.jobs),
     activityCard(feed),
   ]);
   return frag;
+}
+
+// ---------------------------------------------------------------------------
+// The mail server names customers are given
+// ---------------------------------------------------------------------------
+
+/// Set these once and every domain hands out the same pair.
+///
+/// This is the only place in the portal where the provider's name is allowed
+/// to reach a customer, because it is where somebody decides whether it does.
+function mailNamesCard(settings) {
+  const imapHost = el('input', {
+    type: 'text',
+    value: settings.publicImapHost || '',
+    placeholder: 'imap.yourbrand.com',
+    autocapitalize: 'off',
+    spellcheck: false,
+  });
+  const imapPort = el('input', { type: 'number', value: settings.publicImapPort ?? '', placeholder: '993', min: 1, max: 65535 });
+  const smtpHost = el('input', {
+    type: 'text',
+    value: settings.publicSmtpHost || '',
+    placeholder: 'smtp.yourbrand.com',
+    autocapitalize: 'off',
+    spellcheck: false,
+  });
+  const smtpPort = el('input', { type: 'number', value: settings.publicSmtpPort ?? '', placeholder: '465', min: 1, max: 65535 });
+
+  const alertHost = el('div');
+  const save = el('button', { class: 'btn primary' }, 'Save');
+
+  save.onclick = submitHandler(save, alertHost, async () => {
+    await api('/settings', {
+      method: 'PUT',
+      body: {
+        publicImapHost: imapHost.value.trim(),
+        publicImapPort: imapPort.value === '' ? null : Number(imapPort.value),
+        publicSmtpHost: smtpHost.value.trim(),
+        publicSmtpPort: smtpPort.value === '' ? null : Number(smtpPort.value),
+      },
+    });
+    toast('Saved. Every domain set to the standard names now hands these out.', 'ok');
+    refresh();
+  });
+
+  const configured = Boolean(settings.publicImapHost);
+
+  return el(
+    'div',
+    { class: 'card' },
+    el(
+      'div',
+      { class: 'card-head' },
+      el(
+        'div',
+        { class: 'grow' },
+        el('h2', {}, 'Mail server names'),
+        el('p', {}, 'What customers are told to type into Outlook and their phones.'),
+      ),
+      el(
+        'span',
+        { class: `badge ${configured ? 'ok' : 'warn'}` },
+        configured ? 'Your own names' : 'The provider\u2019s names',
+      ),
+    ),
+    el(
+      'div',
+      { class: 'card-body' },
+      alertHost,
+      el(
+        'div',
+        { class: configured ? 'alert info' : 'alert warn' },
+        configured
+          ? [
+              el('span', { class: 'strong' }, 'Customers see your names. '),
+              'Every domain set to the standard names is given these. A domain can still be set to hand out the real server, on its own FTP & Server tab.',
+            ]
+          : [
+              el('span', { class: 'strong' }, 'Leave these empty and customers are told the real server names. '),
+              'That works, and it is what happens today \u2014 it just tells them who the hosting comes from.',
+            ],
+      ),
+      el('div', { class: 'form-row' }, field('Incoming (IMAP) server', imapHost), field('Port', imapPort, 'Usually 993')),
+      el('div', { class: 'form-row' }, field('Outgoing (SMTP) server', smtpHost), field('Port', smtpPort, 'Usually 465')),
+      el(
+        'div',
+        { class: 'alert', style: 'margin-top:4px' },
+        el('span', { class: 'strong' }, 'These have to actually answer. '),
+        'A name that resolves but presents somebody else\u2019s certificate is worse than no name at all: the mail client shows a security warning with the real hostname printed inside it. Point these at a mail proxy of your own with a matching certificate, and use ports that are encrypted from the first byte \u2014 993 and 465.',
+      ),
+      el('div', { style: 'margin-top:16px' }, save),
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------
