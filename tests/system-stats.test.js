@@ -19,6 +19,8 @@ import {
   ratesBetween,
   parseSysfsTemp,
   diskUsage,
+  describeEnvironment,
+  parseCgroupLimit,
   readSystemStats,
   resetSampling,
 } from '../src/lib/systemStats.js';
@@ -194,6 +196,69 @@ test('a filesystem with no usable space at all gives no percentage', () => {
   assert.equal(diskUsage({ totalBytes: 0, freeBytes: 0, availableBytes: 0 }), null);
 });
 
+// --- What the numbers describe -----------------------------------------------
+//
+// "This machine" is not always the machine somebody thinks they are looking
+// at, and getting this wrong is not a rounding error — it is a page that
+// confidently reports a laptop's memory as half what it is.
+
+test('WSL is recognised, because there it is the laptop and it is not', () => {
+  // Reported from a real page: 16 cores and 7.6 GB. The processor count is
+  // the laptop's and the memory is the share Windows handed the Linux VM.
+  // Without this the page says "this machine" and means two different
+  // machines in the same sentence.
+  const wsl = describeEnvironment({ procVersion: 'Linux version 5.15.167.4-microsoft-standard-WSL2 (...)' });
+  assert.equal(wsl.kind, 'wsl');
+  assert.match(wsl.note, /not Windows/i);
+
+  // The environment variable is enough on its own — some WSL kernels are
+  // custom-built and carry neither word in /proc/version.
+  assert.equal(describeEnvironment({ wslEnv: 'Ubuntu' }).kind, 'wsl');
+  assert.equal(describeEnvironment({ procVersion: 'Linux version 5.10 Microsoft' }).kind, 'wsl');
+});
+
+test('a container is recognised from any of the usual signs', () => {
+  assert.equal(describeEnvironment({ hasDockerEnv: true }).kind, 'container');
+  assert.equal(describeEnvironment({ cgroup: '0::/docker/9f2c...' }).kind, 'container');
+  assert.equal(describeEnvironment({ cgroup: '0::/kubepods/besteffort/pod123' }).kind, 'container');
+});
+
+test('an ordinary machine is not labelled as anything', () => {
+  const plain = describeEnvironment({ procVersion: 'Linux version 6.8.0-45-generic', cgroup: '0::/' });
+  assert.equal(plain.kind, 'host');
+  assert.equal(plain.label, null, 'nothing to warn about means no badge');
+  assert.equal(plain.note, null);
+});
+
+test('nothing at all is an ordinary machine, not a crash', () => {
+  assert.equal(describeEnvironment().kind, 'host');
+  assert.equal(describeEnvironment({}).kind, 'host');
+});
+
+// --- A container's memory ceiling --------------------------------------------
+
+test('a container limit is read as the total, not the host machine', () => {
+  // The bug this prevents: os.totalmem() inside a container reports the whole
+  // host. A container capped at 512 MB would draw its bar against 32 GB and
+  // look idle right up to the moment it was killed for running out.
+  assert.equal(parseCgroupLimit('536870912', 34_359_738_368), 536870912);
+});
+
+test('the "no limit" sentinels are not mistaken for a ceiling', () => {
+  const hostTotal = 16_877_547_520;
+  // cgroup v2 writes the word; v1 writes a number near the top of int64.
+  assert.equal(parseCgroupLimit('max', hostTotal), null);
+  assert.equal(parseCgroupLimit('9223372036854771712', hostTotal), null);
+  // And any limit at or above the host's own memory is not a limit.
+  assert.equal(parseCgroupLimit(String(hostTotal), hostTotal), null);
+});
+
+test('an unreadable or nonsense limit is ignored rather than guessed at', () => {
+  for (const junk of ['', '   ', 'abc', '0', '-1', null, undefined]) {
+    assert.equal(parseCgroupLimit(junk, 1000), null, `"${junk}" is not a limit`);
+  }
+});
+
 // --- The whole reading -------------------------------------------------------
 
 test('a reading has every section, and says why anything is missing', async () => {
@@ -202,6 +267,7 @@ test('a reading has every section, and says why anything is missing', async () =
 
   assert.ok(s.at, 'stamped with when it was taken');
   assert.equal(typeof s.host.platform, 'string');
+  assert.ok(s.host.environment?.kind, 'and says what kind of machine it is');
   assert.ok(s.uptime.systemSeconds >= 0);
   assert.ok(s.memory.totalBytes > 0);
   assert.ok(Array.isArray(s.disks) && s.disks.length);

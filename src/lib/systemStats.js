@@ -61,6 +61,63 @@ export function perCoreUsageBetween(before, after) {
   return out;
 }
 
+/// What the numbers on this page actually describe.
+///
+/// "This machine" is not always the machine somebody thinks they are looking
+/// at. Run the portal under WSL and the processor count is the laptop's while
+/// the memory is only the share Windows handed to the Linux VM — half of it,
+/// by default. Run it in a container and the memory figure is the host's
+/// unless a limit is read separately. Both look like a laptop and are not one,
+/// and somebody comparing the page against Task Manager deserves to be told
+/// which of the two they have.
+///
+/// Pure, so every branch can be tested without needing the machine it
+/// describes.
+export function describeEnvironment({ procVersion = '', wslEnv = '', hasDockerEnv = false, cgroup = '' } = {}) {
+  const version = String(procVersion).toLowerCase();
+
+  if (wslEnv || version.includes('microsoft') || version.includes('wsl')) {
+    return {
+      kind: 'wsl',
+      label: 'Windows Subsystem for Linux',
+      note:
+        'These are the Linux environment\u2019s figures, not Windows\u2019. It sees every processor in the machine, but only the share of memory and disk Windows gave it \u2014 half the memory by default.',
+    };
+  }
+
+  if (hasDockerEnv || /docker|containerd|kubepods|lxc/.test(String(cgroup))) {
+    return {
+      kind: 'container',
+      label: 'A container',
+      note:
+        'These are the container\u2019s figures. Processors and memory are whatever it was allowed, which may be a slice of a much larger machine.',
+    };
+  }
+
+  return { kind: 'host', label: null, note: null };
+}
+
+/// A memory ceiling set by the container this is running in, if there is one.
+///
+/// This matters because `os.totalmem()` reports the whole host's memory even
+/// inside a container limited to a fraction of it — so a container capped at
+/// 512 MB would draw a memory bar against 32 GB and look idle right up to the
+/// moment it was killed for running out.
+///
+/// Both cgroup versions write "no limit" as a number so large it is obviously
+/// a sentinel rather than a ceiling, so anything at or above the host's own
+/// memory is treated as no limit at all.
+export function parseCgroupLimit(text, hostTotalBytes) {
+  const raw = String(text ?? '').trim();
+  if (!raw || raw === 'max') return null;
+
+  const bytes = Number(raw);
+  if (!Number.isFinite(bytes) || bytes <= 0) return null;
+  if (hostTotalBytes && bytes >= hostTotalBytes) return null;
+
+  return bytes;
+}
+
 /// Memory from the contents of /proc/meminfo.
 ///
 /// `os.freemem()` on Linux reports memory that is completely unused, which on
@@ -217,7 +274,7 @@ async function readDisk(target) {
 /// Linux exposes these through sysfs. macOS needs a privileged helper and
 /// Windows relies on a WMI class most manufacturers never implement, so on
 /// those this reports nothing rather than guessing.
-async function readTemperatures() {
+async function readTemperatures(environment) {
   if (!isLinux()) {
     return { sensors: [], reason: `Temperature sensors are not readable on ${os.platform()}.` };
   }
@@ -258,11 +315,17 @@ async function readTemperatures() {
   }
 
   if (!sensors.length) {
-    return {
-      sensors: [],
-      reason:
-        'This machine reports no temperature sensors. That is normal on a virtual machine, and on some laptops the sensors are only readable with a driver installed.',
-    };
+    // Named for the environment actually detected. "Normal on a virtual
+    // machine" is true but useless to somebody who believes they are running
+    // on their laptop — which, under WSL, they both are and are not.
+    const reason =
+      {
+        wsl: 'Windows does not pass hardware sensors through to WSL, so no temperature can be read from here. It would need to be read on the Windows side.',
+        container: 'Containers are not given access to the host\u2019s hardware sensors, so no temperature can be read from inside one.',
+      }[environment?.kind] ||
+      'This machine reports no temperature sensors. That is normal on a virtual machine, and on some laptops they are only readable once the right driver is installed.';
+
+    return { sensors: [], reason };
   }
 
   return { sensors, reason: null };
@@ -285,7 +348,58 @@ async function readLinkSpeeds() {
   return out;
 }
 
+/// What kind of machine, or not-quite-machine, this is.
+async function readEnvironment() {
+  if (!isLinux()) return { kind: 'host', label: null, note: null };
+
+  const read = (p) => fs.readFile(p, 'utf8').catch(() => '');
+  const [procVersion, cgroup] = await Promise.all([read('/proc/version'), read('/proc/1/cgroup')]);
+
+  return describeEnvironment({
+    procVersion,
+    wslEnv: process.env.WSL_DISTRO_NAME || '',
+    hasDockerEnv: await fs.access('/.dockerenv').then(() => true).catch(() => false),
+    cgroup,
+  });
+}
+
+/// A container's memory ceiling and current use, where one is set.
+async function readCgroupMemory(hostTotalBytes) {
+  if (!isLinux()) return null;
+
+  const read = (p) => fs.readFile(p, 'utf8').catch(() => null);
+
+  // cgroup v2 first; v1 is the fallback for older kernels.
+  for (const [limitPath, usagePath] of [
+    ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory.current'],
+    ['/sys/fs/cgroup/memory/memory.limit_in_bytes', '/sys/fs/cgroup/memory/memory.usage_in_bytes'],
+  ]) {
+    const totalBytes = parseCgroupLimit(await read(limitPath), hostTotalBytes);
+    if (!totalBytes) continue;
+
+    const used = Number(String((await read(usagePath)) ?? '').trim());
+    if (!Number.isFinite(used) || used < 0) continue;
+
+    const usedBytes = Math.min(used, totalBytes);
+    return {
+      totalBytes,
+      usedBytes,
+      availableBytes: totalBytes - usedBytes,
+      usage: usedBytes / totalBytes,
+      source: 'cgroup',
+    };
+  }
+
+  return null;
+}
+
 async function readMemory() {
+  // A container's ceiling wins over anything else: os.totalmem() and
+  // /proc/meminfo both report the whole host from inside one, which would
+  // draw the bar against memory this process can never have.
+  const limited = await readCgroupMemory(os.totalmem());
+  if (limited) return limited;
+
   if (isLinux()) {
     const parsed = parseMemInfo(await fs.readFile('/proc/meminfo', 'utf8').catch(() => ''));
     if (parsed) {
@@ -332,7 +446,8 @@ export async function readSystemStats({ diskPaths } = {}) {
   const roots = diskPaths?.length ? diskPaths : [path.parse(process.cwd()).root || '/'];
   const disks = await Promise.all(roots.map(readDisk));
 
-  const temperature = await readTemperatures();
+  const environment = await readEnvironment();
+  const temperature = await readTemperatures(environment);
   if (!temperature.sensors.length) unavailable.temperature = temperature.reason;
 
   const linkSpeeds = await readLinkSpeeds();
@@ -348,6 +463,9 @@ export async function readSystemStats({ diskPaths } = {}) {
       arch: os.arch(),
       cpuModel: cpus[0]?.model?.trim() || null,
       cores: cpus.length || null,
+      // What these numbers describe, which is not always the machine the
+      // reader thinks they are looking at.
+      environment,
     },
     uptime: {
       systemSeconds: Math.floor(os.uptime()),

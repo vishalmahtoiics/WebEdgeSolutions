@@ -148,17 +148,36 @@ function panels(s) {
 
 function hostCard(s) {
   const h = s.host;
+  const env = h.environment;
+
   return el(
     'div',
     { class: 'card' },
     el(
       'div',
       { class: 'card-head' },
-      el('div', { class: 'grow' }, el('h2', {}, h.hostname || 'This machine'), el('p', {}, h.cpuModel || 'Processor not reported')),
+      el(
+        'div',
+        { class: 'grow' },
+        el('h2', {}, h.hostname || 'This machine'),
+        el('p', {}, h.cpuModel || 'Processor not reported'),
+      ),
+      env?.label ? el('span', { class: 'badge warn' }, env.label) : null,
     ),
     el(
       'div',
       { class: 'card-body' },
+      // Said before the numbers, not after them. Somebody who opens this page
+      // expecting their laptop should find out here rather than by wondering
+      // why the memory does not match Task Manager.
+      env?.note
+        ? el(
+            'div',
+            { class: 'alert info', style: 'margin-bottom:16px' },
+            el('span', { class: 'strong' }, `Running under ${env.label}. `),
+            env.note,
+          )
+        : null,
       el(
         'div',
         { class: 'stat-row' },
@@ -197,7 +216,10 @@ function loadCard(s) {
           // Worth saying: on Linux the obvious number is the misleading one,
           // and somebody comparing this against `free` deserves to know which
           // of the two they are looking at.
-          mem.source === 'MemAvailable' ? `${bytes(mem.availableBytes)} available to a new program` : null,
+          {
+            MemAvailable: `${bytes(mem.availableBytes)} available to a new program`,
+            cgroup: 'Measured against this container\u2019s limit, not the whole machine\u2019s memory.',
+          }[mem.source] || null,
         ),
         temp
           ? meter(
