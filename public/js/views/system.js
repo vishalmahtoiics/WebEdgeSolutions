@@ -228,7 +228,14 @@ function loadCard(s) {
               // bar moves where it matters rather than sitting at a third.
               Math.max(0, Math.min(1, (temp.celsius - 30) / 60)),
               `${temp.celsius.toFixed(1)} °C — ${temp.sensors[0].label}`,
-              temp.sensors.length > 1 ? `${temp.sensors.length} sensors, hottest shown` : null,
+              [
+                temp.sensors.length > 1 ? `${temp.sensors.length} sensors, hottest shown` : null,
+                // A figure read off the chips and one an ACPI zone reported
+                // are not the same quality of answer.
+                temp.source && temp.source !== 'This machine' ? `Read from: ${temp.source}` : null,
+              ]
+                .filter(Boolean)
+                .join(' · ') || null,
             )
           : meter('Temperature', null, s.unavailable.temperature),
       ),
@@ -244,6 +251,16 @@ function loadCard(s) {
                 el('div', { class: 'small muted' }, String(i + 1)),
               ),
             ),
+          )
+        : null,
+      !temp
+        ? el(
+            'div',
+            { class: 'alert info', style: 'margin-top:14px' },
+            el('span', { class: 'strong' }, 'To read a temperature here: '),
+            'install LibreHardwareMonitor on the machine, switch on its web server, and put the address into ',
+            el('span', { class: 'strong' }, 'Alerts & Activity \u2192 Hardware temperature'),
+            '. It installs a driver that reads the sensor chips directly, which is the only thing that works reliably on Windows.',
           )
         : null,
       s.cpu.loadAvg

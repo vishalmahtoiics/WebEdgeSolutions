@@ -76,6 +76,15 @@ const settingsSchema = z.object({
   publicSmtpHost: z.string().trim().max(255).optional(),
   publicSmtpPort: z.coerce.number().int().min(1).max(65535).nullish(),
 
+  // Where to read hardware temperatures from, when this machine cannot read
+  // its own. Only http(s): the portal fetches it.
+  sensorUrl: z
+    .string()
+    .trim()
+    .max(500)
+    .refine((v) => v === '' || /^https?:\/\/\S+$/i.test(v), 'Enter a web address starting with http:// or https://')
+    .optional(),
+
   notifyEnabled: z.coerce.boolean().optional(),
   notifyDns: z.coerce.boolean().optional(),
   notifyEmailMgmt: z.coerce.boolean().optional(),

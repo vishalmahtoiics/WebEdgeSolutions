@@ -687,6 +687,16 @@ model AppSettings {
   publicSmtpHost String?
   publicSmtpPort Int?
 
+  /// Where to read hardware temperatures from, when the machine running the
+  /// portal cannot read its own.
+  ///
+  /// A LibreHardwareMonitor or Open Hardware Monitor web server, for example
+  /// http://127.0.0.1:8085/data.json. Those install a driver that reads the
+  /// sensor chips directly, which is the only thing that reliably works on
+  /// Windows: the sensor class Windows exposes itself is left unimplemented
+  /// by most laptop manufacturers.
+  sensorUrl String?
+
   /// The master switch, and one per area so a noisy one can be silenced
   /// without losing the rest.
   notifyEnabled   Boolean @default(false)

@@ -15,6 +15,8 @@ import os from 'node:os';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+import { readRemoteTemperature } from './temperature.js';
+
 // ---------------------------------------------------------------------------
 // The arithmetic
 // ---------------------------------------------------------------------------
@@ -274,10 +276,9 @@ async function readDisk(target) {
 /// Linux exposes these through sysfs. macOS needs a privileged helper and
 /// Windows relies on a WMI class most manufacturers never implement, so on
 /// those this reports nothing rather than guessing.
-async function readTemperatures(environment) {
-  if (!isLinux()) {
-    return { sensors: [], reason: `Temperature sensors are not readable on ${os.platform()}.` };
-  }
+/// Temperatures from this machine's own sysfs, where it has any.
+async function readLocalTemperatures() {
+  if (!isLinux()) return { sensors: [] };
 
   const sensors = [];
 
@@ -314,21 +315,41 @@ async function readTemperatures(environment) {
     }
   }
 
-  if (!sensors.length) {
-    // Named for the environment actually detected. "Normal on a virtual
-    // machine" is true but useless to somebody who believes they are running
-    // on their laptop — which, under WSL, they both are and are not.
-    const reason =
-      {
-        wsl: 'Windows does not pass hardware sensors through to WSL, so no temperature can be read from here. It would need to be read on the Windows side.',
-        container: 'Containers are not given access to the host\u2019s hardware sensors, so no temperature can be read from inside one.',
-      }[environment?.kind] ||
-      'This machine reports no temperature sensors. That is normal on a virtual machine, and on some laptops they are only readable once the right driver is installed.';
+  return { sensors, source: sensors.length ? 'This machine' : null };
+}
 
-    return { sensors: [], reason };
-  }
+/// Why there is no temperature, in terms of the machine this is running on.
+function noTemperatureReason(environment) {
+  return (
+    {
+      wsl: 'Windows does not pass hardware sensors through to WSL, so nothing can be read from the Linux side.',
+      container: 'Containers are not given access to the host\u2019s hardware sensors.',
+    }[environment?.kind] ||
+    'This machine reports no temperature sensors. That is normal on a virtual machine, and on some laptops they are only readable once the right driver is installed.'
+  );
+}
 
-  return { sensors, reason: null };
+/// Every way of asking, in turn.
+///
+/// The machine's own sensors first, because that reading costs nothing. Only
+/// if there are none does this go looking elsewhere — a sensor program, or
+/// Windows itself when running under WSL.
+async function readTemperatures(environment, sensorUrl) {
+  const local = await readLocalTemperatures();
+  if (local.sensors.length) return { ...local, reason: null };
+
+  const remote = await readRemoteTemperature({
+    sensorUrl,
+    environment,
+    platform: os.platform(),
+  });
+  if (remote.sensors.length) return { sensors: remote.sensors, source: remote.source, reason: null };
+
+  // What was tried and what it said, then why this machine has nothing of its
+  // own — in that order, because the first is actionable and the second is
+  // background.
+  const reason = [remote.reason, noTemperatureReason(environment)].filter(Boolean).join(' ');
+  return { sensors: [], source: null, reason };
 }
 
 /// Link speed in megabits, where the driver reports one.
@@ -419,7 +440,7 @@ async function readMemory() {
 }
 
 /// Everything, as one reading.
-export async function readSystemStats({ diskPaths } = {}) {
+export async function readSystemStats({ diskPaths, sensorUrl } = {}) {
   const unavailable = {};
 
   // Take the second half of both rate measurements together, so CPU and
@@ -447,7 +468,7 @@ export async function readSystemStats({ diskPaths } = {}) {
   const disks = await Promise.all(roots.map(readDisk));
 
   const environment = await readEnvironment();
-  const temperature = await readTemperatures(environment);
+  const temperature = await readTemperatures(environment, sensorUrl);
   if (!temperature.sensors.length) unavailable.temperature = temperature.reason;
 
   const linkSpeeds = await readLinkSpeeds();
@@ -484,6 +505,9 @@ export async function readSystemStats({ diskPaths } = {}) {
           // for somebody who wants to know which part is hot.
           celsius: Math.max(...temperature.sensors.map((s) => s.celsius)),
           sensors: temperature.sensors.sort((a, b) => b.celsius - a.celsius),
+          // Where it came from. A figure read off the chips directly and one
+          // an ACPI zone reported are not the same quality of answer.
+          source: temperature.source,
         }
       : null,
     network: rates ? { sampleMs: elapsedMs, interfaces: rates.map((r) => ({ ...r, linkSpeedMbps: linkSpeeds[r.name] ?? null })) } : null,

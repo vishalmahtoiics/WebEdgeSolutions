@@ -68,6 +68,7 @@ export async function renderNotifications() {
         )
       : null,
     mailNamesCard(settings),
+    sensorCard(settings),
     settingsCard(settings),
     scheduleCard(settings, jobsResult.jobs),
     activityCard(feed),
@@ -164,6 +165,69 @@ function mailNamesCard(settings) {
         'A name that resolves but presents somebody else\u2019s certificate is worse than no name at all: the mail client shows a security warning with the real hostname printed inside it. Point these at a mail proxy of your own with a matching certificate, and use ports that are encrypted from the first byte \u2014 993 and 465.',
       ),
       el('div', { style: 'margin-top:16px' }, save),
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Hardware temperature
+// ---------------------------------------------------------------------------
+
+/// Where to read temperatures from, when the machine cannot read its own.
+///
+/// Its own sensors are always tried first and cost nothing; this is only
+/// consulted when there are none — which under WSL, in a container, and on
+/// most of Windows is always.
+function sensorCard(settings) {
+  const url = el('input', {
+    type: 'text',
+    value: settings.sensorUrl || '',
+    placeholder: 'http://127.0.0.1:8085/data.json',
+    autocapitalize: 'off',
+    spellcheck: false,
+  });
+
+  const alertHost = el('div');
+  const save = el('button', { class: 'btn primary' }, 'Save');
+
+  save.onclick = submitHandler(save, alertHost, async () => {
+    await api('/settings', { method: 'PUT', body: { sensorUrl: url.value.trim() } });
+    toast('Saved. The System page will use it on its next reading.', 'ok');
+    refresh();
+  });
+
+  return el(
+    'div',
+    { class: 'card' },
+    el(
+      'div',
+      { class: 'card-head' },
+      el(
+        'div',
+        { class: 'grow' },
+        el('h2', {}, 'Hardware temperature'),
+        el('p', {}, 'Only needed where the machine cannot read its own sensors.'),
+      ),
+      el('span', { class: `badge ${settings.sensorUrl ? 'ok' : ''}` }, settings.sensorUrl ? 'Configured' : 'Not set'),
+    ),
+    el(
+      'div',
+      { class: 'card-body' },
+      alertHost,
+      el(
+        'div',
+        { class: 'alert info' },
+        el('span', { class: 'strong' }, 'Windows hides its sensors. '),
+        'The sensor class Windows exposes is left unimplemented by most laptop manufacturers, and under WSL nothing is passed through at all. ',
+        el('strong', {}, 'LibreHardwareMonitor'),
+        ' installs a driver that reads the chips directly and will serve every reading as JSON \u2014 switch on Options \u2192 Remote Web Server, then put that address here.',
+      ),
+      field(
+        'Sensor program address',
+        url,
+        'Usually http://127.0.0.1:8085/data.json. From WSL, 127.0.0.1 is the Linux side \u2014 use the Windows host address instead.',
+      ),
+      el('div', { style: 'margin-top:4px' }, save),
     ),
   );
 }

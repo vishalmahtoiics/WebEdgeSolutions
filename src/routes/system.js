@@ -9,6 +9,7 @@ import { Router } from 'express';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { asyncHandler } from '../lib/errors.js';
 import { readSystemStats } from '../lib/systemStats.js';
+import { getAppSettings } from '../services/notifier.js';
 
 export const systemRouter = Router();
 
@@ -17,6 +18,9 @@ systemRouter.use(requireAuth, requireAdmin);
 systemRouter.get(
   '/',
   asyncHandler(async (_req, res) => {
-    res.json({ stats: await readSystemStats() });
+    // Where to look for temperatures when this machine has no sensors of its
+    // own, which under WSL and in a container is always.
+    const { sensorUrl } = await getAppSettings();
+    res.json({ stats: await readSystemStats({ sensorUrl }) });
   }),
 );
