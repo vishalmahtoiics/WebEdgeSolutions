@@ -120,7 +120,38 @@ const sharedDir = path.join(__dirname, '..', 'public-shared');
 const storeDir = path.join(__dirname, '..', 'public-store');
 const portalDir = path.join(__dirname, '..', 'public');
 const mailDir = path.join(__dirname, '..', 'public-mail');
-const staticOptions = { maxAge: isProd ? '1h' : 0 };
+
+/// How long a browser may keep a file before asking again.
+///
+/// Nothing here is content-hashed — base.css is called base.css whatever is
+/// in it — so no file can be marked immutable. That is not a style
+/// preference: `immutable` tells a browser never to revalidate, not even on
+/// an ordinary reload, and this was serving the shared stylesheet with
+/// `max-age=30d, immutable`. A change to it therefore could not reach anyone
+/// who had already loaded the site, for a month, and the only way out was a
+/// hard reload nobody knows to do. It showed up as a page rendering with
+/// every card in place and none of the newer styling applied.
+///
+/// So: revalidate everything that can change. A conditional request for an
+/// unchanged file costs a 304 and a hundred or so bytes, which is the right
+/// trade against shipping a change that silently does not arrive.
+///
+/// Fonts are the exception. They are large, they are the two slowest things
+/// on a first paint, and replacing one is rare enough — and cosmetic enough
+/// when stale — to be worth a week of caching.
+const FONT = /\.(woff2?|ttf|otf|eot)$/i;
+
+const staticOptions = {
+  etag: true,
+  lastModified: true,
+  setHeaders(res, filePath) {
+    if (!isProd) return res.setHeader('Cache-Control', 'no-store');
+    res.setHeader(
+      'Cache-Control',
+      FONT.test(filePath) ? 'public, max-age=604800' : 'no-cache',
+    );
+  },
+};
 
 const isMailHost = (req) =>
   Boolean(config.mailHost) && String(req.hostname || '').toLowerCase() === config.mailHost;
@@ -147,7 +178,7 @@ const mountSpa = (base, dir) => {
   );
 };
 
-app.use('/shared', express.static(sharedDir, { maxAge: isProd ? '30d' : 0, immutable: isProd }));
+app.use('/shared', express.static(sharedDir, staticOptions));
 
 mountSpa('/portal', portalDir);
 
