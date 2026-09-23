@@ -19,6 +19,7 @@ import { storeRouter } from './routes/store.js';
 import { catalogRouter } from './routes/catalog.js';
 import { ordersRouter } from './routes/orders.js';
 import { settingsRouter } from './routes/settings.js';
+import { systemRouter } from './routes/system.js';
 import { billingRouter } from './routes/billing.js';
 import { ticketsRouter } from './routes/tickets.js';
 import { startScheduler } from './services/scheduler.js';
@@ -90,6 +91,7 @@ app.use('/api/store', storeRouter);
 app.use('/api/catalog', catalogRouter);
 app.use('/api/orders', ordersRouter);
 app.use('/api/settings', settingsRouter);
+app.use('/api/system', systemRouter);
 app.use('/api/billing', billingRouter);
 app.use('/api/tickets', ticketsRouter);
 

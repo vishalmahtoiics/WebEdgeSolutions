@@ -398,6 +398,29 @@ test('a user cannot reach the provider administration at all', async () => {
   assert.equal((await member(`/providers/${ctx.providerId}/servers`)).status, 403);
 });
 
+test('a user cannot read what the machine is doing', async () => {
+  // Not because the numbers are dangerous, but because taken together the
+  // hostname, processor, disk layout and network interfaces describe the
+  // server this runs on. That is infrastructure, like the provider's name.
+  assert.equal((await member('/system')).status, 403);
+});
+
+test('an administrator gets a live reading of the machine', async () => {
+  const { status, data } = await admin('/system');
+  assert.equal(status, 200);
+
+  assert.ok(data.stats.host.platform, 'which machine this is');
+  assert.ok(data.stats.memory.totalBytes > 0, 'how much memory it has');
+  assert.ok(data.stats.disks.length, 'and its disks');
+
+  // Anything missing is named, not left as a silent gap for the page to draw
+  // as a zero.
+  for (const [key, value] of Object.entries(data.stats.unavailable)) {
+    assert.equal(typeof value, 'string', `${key} was marked unavailable without saying why`);
+    assert.ok(value.length > 10, `${key}: "${value}" does not explain anything`);
+  }
+});
+
 test('a user cannot refresh a domain they are not assigned', async () => {
   const res = await member(`/domains/${ctx.hiddenId}/refresh`, { method: 'POST' });
   assert.equal(res.status, 404);

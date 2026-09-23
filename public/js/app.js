@@ -13,6 +13,7 @@ import { renderWebmail } from './views/webmail.js';
 import { renderPlans } from './views/plans.js';
 import { renderOrders } from './views/orders.js';
 import { renderNotifications } from './views/notifications.js';
+import { renderSystem } from './views/system.js';
 import { renderBilling } from './views/billing.js';
 import { renderTickets } from './views/tickets.js';
 
@@ -32,6 +33,7 @@ const ADMIN_NAV = [
   { route: 'users', label: 'Users', icon: 'users' },
   { route: 'providers', label: 'Providers / APIs', icon: 'plug' },
   { route: 'resources', label: 'Server Resources', icon: 'server' },
+  { route: 'system', label: 'System', icon: 'clock' },
   { route: 'alerts', label: 'Alerts & Activity', icon: 'bell' },
   { route: 'settings', label: 'Settings', icon: 'settings' },
 ];
@@ -59,12 +61,13 @@ const VIEWS = {
   orders: renderOrders,
   plans: renderPlans,
   alerts: renderNotifications,
+  system: renderSystem,
   billing: renderBilling,
   support: renderTickets,
 };
 
 // Routes a normal user must never reach, even by typing the hash directly.
-const ADMIN_ONLY = new Set(['users', 'providers', 'orders', 'plans', 'alerts']);
+const ADMIN_ONLY = new Set(['users', 'providers', 'orders', 'plans', 'alerts', 'system']);
 
 function parseHash() {
   const raw = (location.hash || '#/dashboard').replace(/^#\/?/, '');
