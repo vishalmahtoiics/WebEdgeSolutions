@@ -178,6 +178,100 @@ test('the connection can be tested', async () => {
   assert.equal(status, 200);
   assert.equal(data.ok, true);
   assert.match(data.message, /Connected/);
+
+  // Both halves are checked, because they fail for different reasons.
+  assert.equal(data.checks.connect.ok, true);
+  assert.equal(data.checks.list.ok, true);
+  assert.match(data.checks.list.message, /public_html/);
+  assert.equal(data.error, null, 'nothing went wrong, so there is nothing to report');
+});
+
+test('a failed test says why, instead of a bare status code', async () => {
+  // The shape the browser can actually render. This used to answer 400 with
+  // `ok` and `message` and no `error`, which is the one combination the API
+  // helper falls back to "Request failed (400)" on — throwing away the real
+  // reason on the last step before the screen.
+  const { status, data } = await admin(`/domains/${ctx.domainId}/files/test`, {
+    method: 'POST',
+    body: { password: 'definitely-not-the-password' },
+  });
+
+  assert.equal(status, 200, 'the test ran; its result is the answer');
+  assert.equal(data.ok, false);
+  assert.equal(data.checks.connect.ok, false);
+  assert.match(data.checks.connect.message, /credentials|password|login/i);
+  assert.equal(data.error, data.message, 'repeated where a generic caller looks');
+  assert.ok(!JSON.stringify(data).includes('definitely-not-the-password'));
+});
+
+test('a password nobody saved is not something a customer may try', async () => {
+  // Testing the stored details is a fair question for whoever owns the
+  // domain. Testing an arbitrary password against somebody's file server is
+  // a brute-force helper, so that half is Super Admin's.
+  const res = await member(`/domains/${ctx.domainId}/files/test`, {
+    method: 'POST',
+    body: { password: 'guess-one' },
+  });
+  assert.equal(res.status, 400);
+  assert.match(res.data.error, /Super Admin/i);
+
+  // The plain check still works for them.
+  const plain = await member(`/domains/${ctx.domainId}/files/test`, { method: 'POST' });
+  assert.equal(plain.status, 200);
+  assert.equal(plain.data.ok, true);
+});
+
+test('a domain with nothing saved says so, rather than failing to connect', async () => {
+  // "No host is saved" and "the host refused you" need different fixes, and
+  // a connection error for a domain that was never set up is a confusing way
+  // to learn the first one.
+  const { status, data } = await admin(`/domains/${ctx.otherId}/files/test`, { method: 'POST' });
+  assert.equal(status, 200);
+  assert.equal(data.ok, false);
+  assert.match(data.message, /Nothing to test yet/i);
+  assert.match(data.message, /no host/i);
+  assert.equal(data.checks.connect, null, 'nothing was tried');
+});
+
+test('a root folder that does not exist is told apart from a bad password', async () => {
+  // The two look identical from the Files tab, and the fixes are nothing
+  // alike: one is a typo in a path, the other is a credential.
+  await admin(`/domains/${ctx.domainId}/settings`, {
+    method: 'PUT',
+    body: { ftpRootPath: '/no_such_folder' },
+  });
+
+  try {
+    const { data } = await admin(`/domains/${ctx.domainId}/files/test`, { method: 'POST' });
+    assert.equal(data.ok, false);
+    assert.equal(data.checks.connect.ok, true, 'the credentials were fine');
+    assert.equal(data.checks.list.ok, false, 'the folder was not');
+    assert.match(data.checks.list.message, /no_such_folder/);
+  } finally {
+    await admin(`/domains/${ctx.domainId}/settings`, {
+      method: 'PUT',
+      body: { ftpRootPath: '/public_html' },
+    });
+  }
+});
+
+test('a root set to the account rather than the site is pointed out', async () => {
+  // Everything works and the file manager shows the wrong folder, which is
+  // the sort of thing somebody discovers after an hour of edits doing
+  // nothing to their website.
+  await admin(`/domains/${ctx.domainId}/settings`, { method: 'PUT', body: { ftpRootPath: '/' } });
+
+  try {
+    const { data } = await admin(`/domains/${ctx.domainId}/files/test`, { method: 'POST' });
+    assert.equal(data.ok, true, 'it does work — that is the point');
+    assert.match(data.checks.list.message, /account root rather than the site/i);
+    assert.match(data.checks.list.message, /public_html/);
+  } finally {
+    await admin(`/domains/${ctx.domainId}/settings`, {
+      method: 'PUT',
+      body: { ftpRootPath: '/public_html' },
+    });
+  }
 });
 
 // --- Browsing ---------------------------------------------------------------

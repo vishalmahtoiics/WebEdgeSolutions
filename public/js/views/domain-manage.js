@@ -1155,6 +1155,7 @@ function settingsPanel(data) {
             inputs.ftpRootPath,
             'The file manager is confined to this folder. Usually /public_html. Leave blank for the login directory.',
           ),
+          ftpTest(d, inputs),
         ),
       ),
       el(
@@ -1427,6 +1428,85 @@ function editDomainModal(d) {
 /// nobody able to tell a wrong password from an IMAP host that was never
 /// filled in — this is where that is answered, with the same credentials and
 /// the same code path the mail app uses.
+/// Tries the saved FTP details and says what happened.
+///
+/// Without it the first anyone hears of a wrong password is the Files tab
+/// failing to open, where the message is about the operation rather than the
+/// credentials — so a typo in the host reads exactly like a password that was
+/// changed at the provider.
+function ftpTest(domain, inputs) {
+  const password = el('input', { type: 'password', autocomplete: 'off', placeholder: 'Leave blank to use the saved one' });
+  const run = el('button', { class: 'btn' }, icon('check', 16), 'Test connection');
+  const out = el('div');
+
+  const line = (label, check) =>
+    check
+      ? el(
+          'div',
+          { class: 'row', style: 'align-items:flex-start;gap:10px;margin-bottom:8px' },
+          el('span', { class: `badge ${check.ok ? 'ok' : 'danger'}` }, check.ok ? 'ok' : 'failed'),
+          el('span', { class: 'small grow' }, el('span', { class: 'strong' }, `${label}: `), check.message),
+        )
+      : null;
+
+  run.onclick = async () => {
+    clear(out);
+    run.disabled = true;
+    run.classList.add('is-busy');
+
+    try {
+      const res = await api(`/domains/${domain.id}/files/test`, {
+        method: 'POST',
+        // Only sent when something was typed. Blank means "check what is
+        // saved", which is the question most often being asked.
+        body: password.value ? { password: password.value } : {},
+      });
+
+      out.append(
+        el(
+          'div',
+          { class: `alert ${res.ok ? 'ok' : 'error'}`, style: 'margin-bottom:12px' },
+          res.message,
+        ),
+        line('Connection', res.checks.connect),
+        line('Folder', res.checks.list),
+        res.protocol
+          ? el(
+              'p',
+              { class: 'hint', style: 'margin-top:10px' },
+              'Tried ',
+              el('span', { class: 'mono' }, `${inputs.ftpHost.value.trim() || 'no host'} over ${res.protocol}`),
+              ', reading ',
+              el('span', { class: 'mono' }, res.root),
+              '.',
+            )
+          : null,
+      );
+
+      // Not kept on screen, the same as everywhere else a password is typed.
+      password.value = '';
+    } catch (err) {
+      out.append(errorAlert(err));
+    } finally {
+      run.disabled = false;
+      run.classList.remove('is-busy');
+      clear(run).append(icon('check', 16), 'Test connection');
+    }
+  };
+
+  return el(
+    'div',
+    { style: 'margin-top:4px' },
+    el(
+      'p',
+      { class: 'hint', style: 'margin:0 0 10px' },
+      'Checks the saved details against the real server. Save first if you have just changed something above \u2014 or type a password here to try one before saving it.',
+    ),
+    el('div', { class: 'form-row' }, field('Password to try (optional)', password), el('div', { style: 'align-self:end' }, run)),
+    out,
+  );
+}
+
 function mailTest(domain) {
   const address = el('input', { type: 'email', placeholder: `you@${domain.name}`, autocomplete: 'off' });
   const password = el('input', { type: 'password', autocomplete: 'off' });

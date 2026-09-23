@@ -9,6 +9,7 @@ import { z } from 'zod';
 import multer from 'multer';
 import { prisma } from '../db.js';
 import { validate } from '../middleware/validate.js';
+import { isAdmin } from '../middleware/auth.js';
 import { asyncHandler, badRequest, notFound } from '../lib/errors.js';
 import { decryptMaybe } from '../lib/crypto.js';
 import { record } from '../services/notifier.js';
@@ -253,19 +254,115 @@ filesRouter.post(
   }),
 );
 
-/// Checks the stored credentials actually work, the same way the provider page
-/// tests an API token.
+/// Folders a hosting account keeps the website in. Seeing one of these at the
+/// top level means the root folder is set to the account rather than the site.
+const WEB_ROOTS = ['public_html', 'htdocs', 'www', 'httpdocs'];
+
+/// Checks the stored credentials actually work, and says what happened.
+///
+/// Two things are checked, because they fail for different reasons and need
+/// different fixes: whether the credentials open a connection at all, and
+/// whether the folder the file manager is confined to can be read. A correct
+/// password pointed at a folder that does not exist fails later and reads
+/// exactly like a login problem.
+///
+/// Answers 200 whichever way it goes. The request was well formed and the
+/// server did what was asked — it tried the credentials and is reporting what
+/// happened. This used to answer 400 or 502 with `ok` and `message` and no
+/// `error`, which is the one shape the browser's API helper cannot render:
+/// it falls back to "Request failed (400)" and throws the real reason away.
+///
+/// `password` tries one that has not been saved yet. Super Admin only, that
+/// part: it turns this into an oracle for whether a given password opens
+/// somebody's file server, which is not something to leave open.
 filesRouter.post(
   '/test',
+  validate(z.object({ password: z.string().max(255).optional() })),
   asyncHandler(async (req, res) => {
-    try {
-      const count = await run(req.domain.id, async (storage, credentials) => {
-        const entries = await storage.list(resolvePath(credentials.root, '/'));
-        return entries.length;
-      });
-      res.json({ ok: true, message: `Connected. The top-level folder has ${count} item${count === 1 ? '' : 's'}.` });
-    } catch (err) {
-      res.status(err.status && err.status < 500 ? 400 : 502).json({ ok: false, message: err.message });
+    const typed = String(req.body.password || '');
+    if (typed && !isAdmin(req.user)) {
+      throw badRequest('Only a Super Admin can try a password that has not been saved.');
     }
+
+    const settings = await prisma.domainSettings.findUnique({ where: { domainId: req.domain.id } });
+
+    // Said plainly rather than as a connection failure: there is a difference
+    // between details that do not work and details that were never entered.
+    const missing = [];
+    if (!settings?.ftpHost) missing.push('host');
+    if (!settings?.ftpUsername) missing.push('username');
+    const password = typed || decryptMaybe(settings?.ftpPassword);
+    if (!password) missing.push('password');
+
+    if (missing.length) {
+      const message = `Nothing to test yet — no ${missing.join(', no ')} is saved for this domain.`;
+      return res.json({ ok: false, message, error: message, checks: { connect: null, list: null } });
+    }
+
+    const protocol = (settings.ftpProtocol || 'FTP').toUpperCase();
+    const root = settings.ftpRootPath || '/';
+    const checks = { connect: null, list: null };
+
+    try {
+      const entries = await withStorage(
+        {
+          host: settings.ftpHost,
+          port: settings.ftpPort,
+          username: settings.ftpUsername,
+          password,
+          protocol,
+          root,
+        },
+        (storage) => storage.list(resolvePath(root, '/')),
+      );
+
+      checks.connect = { ok: true, message: `Signed in over ${protocol}.` };
+      checks.list = {
+        ok: true,
+        message: `Read ${root} — ${entries.length} item${entries.length === 1 ? '' : 's'}.`,
+      };
+
+      // Pointed at the account rather than the site, the file manager works
+      // perfectly and shows the wrong folder — which is worth catching here
+      // rather than leaving somebody to wonder why their edits do nothing.
+      const names = entries.map((e) => e.name);
+      const webRoot = names.find((n) => WEB_ROOTS.includes(n));
+      if (webRoot && !names.some((n) => n === 'index.php' || n === 'index.html')) {
+        checks.list.message +=
+          ` This looks like the account root rather than the site itself — the website is probably under ` +
+          `${root.replace(/\/+$/, '')}/${webRoot}.`;
+      }
+    } catch (err) {
+      const message = err?.message || 'The connection failed.';
+      // Signed in but could not read the folder is a different fix from
+      // could not sign in, and the second is easy to mistake for the first.
+      const folderProblem = /no such file|not found|550|ENOENT/i.test(message) && !/could not be found/i.test(message);
+
+      checks.connect = folderProblem
+        ? { ok: true, message: `Signed in over ${protocol}.` }
+        : { ok: false, message };
+      checks.list = folderProblem
+        ? { ok: false, message: `Signed in, but could not read ${root}. ${message}` }
+        : { ok: false, message: 'Not tried — the connection did not open.' };
+    }
+
+    const ok = Boolean(checks.connect?.ok && checks.list?.ok);
+    const message = ok ? `Connected, and ${root} can be read.` : (checks.connect.ok ? checks.list.message : checks.connect.message);
+
+    await record({
+      event: 'settings.domain.ftp-tested',
+      actor: req.user,
+      domain: req.domain,
+      summary: `Tested the file server for ${req.domain.name}`,
+      // Where it went and how it went. Never the password.
+      detail:
+        `Tried ${settings.ftpHost}:${settings.ftpPort || (protocol === 'SFTP' ? 22 : 21)} as ` +
+        `${settings.ftpUsername} over ${protocol}, reading ${root}.\n\n` +
+        `Connect: ${checks.connect.message}\nFolder:  ${checks.list.message}`,
+    });
+
+    // `error` as well, so a caller that only looks there still gets something
+    // true rather than a status code.
+    res.json({ ok, protocol, root, checks, message, error: ok ? null : message });
   }),
 );
