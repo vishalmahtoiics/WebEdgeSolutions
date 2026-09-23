@@ -26,6 +26,11 @@ const userPassword = 'MailUser@12345';
 /// shape actually sent rather than only that something worked.
 let lastCreateBody = null;
 
+/// Provider ids the stub will refuse to delete. A batch against a real API is
+/// not all-or-nothing, and the only way to prove this code says so honestly is
+/// to have one of them fail.
+const refuseDelete = new Set();
+
 let mailboxes = [
   { id: 'mb_1', address: `info@${DOMAIN}`, status: 'active', usage: { storageQuota: 10485760, storageUsed: 524288 } },
 ];
@@ -118,6 +123,10 @@ test.before(async () => {
     // Delete mailbox
     const del = path.match(/^\/api\/mail\/v1\/mailboxes\/([^/]+)$/);
     if (req.method === 'DELETE' && del) {
+      if (refuseDelete.has(del[1])) {
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ message: 'This mailbox is locked and cannot be deleted.' }));
+      }
       mailboxes = mailboxes.filter((m) => m.id !== del[1]);
       res.writeHead(204);
       return res.end();
@@ -405,4 +414,230 @@ test('a user sees the effective figure but not the two apart', async () => {
   for (const field of ['providerQuotaMb', 'quotaMbOverride', 'usesCustomQuota', 'isFromProvider']) {
     assert.equal(m[field], undefined, `${field} is an administrator's concern`);
   }
+});
+
+// --- Deleting several at once ------------------------------------------------
+//
+// The dangerous one. Everything here is about the batch telling the truth:
+// what went, what stayed, and why — because "23 deleted" when three of them
+// are still sitting on the mail server is the kind of wrong that is only
+// discovered much later.
+
+/// Makes `count` live mailboxes at the provider and returns their portal rows.
+async function provisionMany(count, prefix) {
+  const made = [];
+  for (let i = 0; i < count; i += 1) {
+    const res = await admin(`/domains/${ctx.domainId}/emails/provision`, {
+      method: 'POST',
+      body: { address: `${prefix}${i}@${DOMAIN}`, password: 'Str0ng!Passw0rd' },
+    });
+    assert.equal(res.status, 201, `could not provision ${prefix}${i}`);
+    made.push(res.data.email);
+  }
+  return made;
+}
+
+test('several portal records are removed in one request, and the provider is untouched', async () => {
+  const rows = [];
+  for (const name of ['bulk-a', 'bulk-b', 'bulk-c']) {
+    const res = await admin(`/domains/${ctx.domainId}/emails`, {
+      method: 'POST',
+      body: { address: `${name}@${DOMAIN}` },
+    });
+    rows.push(res.data.email);
+  }
+  const countBefore = mailboxes.length;
+
+  const res = await admin(`/domains/${ctx.domainId}/emails/bulk-delete`, {
+    method: 'POST',
+    body: { ids: rows.map((r) => r.id), mode: 'portal' },
+  });
+
+  assert.equal(res.status, 200);
+  assert.equal(res.data.ok, true);
+  assert.equal(res.data.deleted, 3);
+  assert.equal(res.data.destroyedAtProvider, 0);
+  assert.equal(mailboxes.length, countBefore, 'a portal removal must not reach the mail server');
+
+  const after = await admin(`/domains/${ctx.domainId}`);
+  for (const row of rows) {
+    assert.ok(!after.data.emailAccounts.some((m) => m.id === row.id), `${row.address} should be gone`);
+  }
+});
+
+test('several live mailboxes are deleted at the provider in one request', async () => {
+  const made = await provisionMany(3, 'bulk-live-');
+
+  const res = await admin(`/domains/${ctx.domainId}/emails/bulk-delete`, {
+    method: 'POST',
+    body: { ids: made.map((m) => m.id), mode: 'provider' },
+  });
+
+  assert.equal(res.status, 200);
+  assert.equal(res.data.ok, true);
+  assert.equal(res.data.deleted, 3);
+  assert.equal(res.data.destroyedAtProvider, 3);
+
+  for (const m of made) {
+    assert.ok(!mailboxes.some((x) => x.address === m.address), `${m.address} should be gone at the provider`);
+  }
+  const after = await admin(`/domains/${ctx.domainId}`);
+  assert.ok(!after.data.emailAccounts.some((m) => made.some((x) => x.id === m.id)));
+});
+
+test('when part of a batch fails, the reply names what went and what stayed', async () => {
+  const made = await provisionMany(3, 'bulk-mixed-');
+
+  // Find the stubborn one's upstream id and make the provider refuse it.
+  const stuck = made[1];
+  const upstream = mailboxes.find((m) => m.address === stuck.address);
+  refuseDelete.add(upstream.id);
+
+  try {
+    const res = await admin(`/domains/${ctx.domainId}/emails/bulk-delete`, {
+      method: 'POST',
+      body: { ids: made.map((m) => m.id), mode: 'provider' },
+    });
+
+    assert.equal(res.status, 200, 'the request was fine; two of three deletions were not');
+    assert.equal(res.data.ok, false, 'not everything worked, so this must not claim it did');
+    assert.equal(res.data.deleted, 2);
+    assert.equal(res.data.failed, 1);
+
+    const failed = res.data.results.filter((r) => !r.ok);
+    assert.equal(failed.length, 1);
+    assert.equal(failed[0].address, stuck.address, 'named, not counted');
+    assert.match(failed[0].error, /locked and cannot be deleted/i, "the provider's own reason");
+    assert.match(res.data.message, /could not be deleted/i);
+    assert.ok(res.data.message.includes(stuck.address), 'the one sentence names it too');
+
+    // The refusal must leave that mailbox alone on both sides, and must not
+    // have stopped the ones after it.
+    assert.ok(mailboxes.some((m) => m.address === stuck.address), 'still at the provider');
+    const after = await admin(`/domains/${ctx.domainId}`);
+    assert.ok(
+      after.data.emailAccounts.some((m) => m.id === stuck.id),
+      'the portal must still show a mailbox that still exists',
+    );
+    assert.ok(
+      !after.data.emailAccounts.some((m) => m.address === made[2].address),
+      'one refusal must not stop the rest of the batch',
+    );
+  } finally {
+    refuseDelete.delete(upstream.id);
+    await admin(`/domains/${ctx.domainId}/emails/bulk-delete`, {
+      method: 'POST',
+      body: { ids: [stuck.id], mode: 'provider' },
+    });
+  }
+});
+
+test('a portal-only mailbox inside a provider batch is removed, not refused', async () => {
+  const live = (await provisionMany(1, 'bulk-both-'))[0];
+  const manual = (
+    await admin(`/domains/${ctx.domainId}/emails`, {
+      method: 'POST',
+      body: { address: `bulk-both-manual@${DOMAIN}` },
+    })
+  ).data.email;
+
+  const res = await admin(`/domains/${ctx.domainId}/emails/bulk-delete`, {
+    method: 'POST',
+    body: { ids: [live.id, manual.id], mode: 'provider' },
+  });
+
+  assert.equal(res.data.ok, true);
+  assert.equal(res.data.deleted, 2);
+  assert.equal(res.data.destroyedAtProvider, 1, 'only one of them existed at the provider');
+  // And the sentence says so rather than implying both were destroyed.
+  assert.match(res.data.message, /only existed in this portal/i);
+});
+
+test('duplicate ids delete once and are counted once', async () => {
+  const made = await provisionMany(1, 'bulk-dupe-');
+
+  const res = await admin(`/domains/${ctx.domainId}/emails/bulk-delete`, {
+    method: 'POST',
+    body: { ids: [made[0].id, made[0].id, made[0].id], mode: 'provider' },
+  });
+
+  assert.equal(res.data.deleted, 1, 'three copies of one id are one mailbox');
+  assert.equal(res.data.results.length, 1);
+});
+
+test('a mailbox from another domain is refused, and the batch does not run', async () => {
+  const mine = (
+    await admin(`/domains/${ctx.domainId}/emails`, {
+      method: 'POST',
+      body: { address: `bulk-scope@${DOMAIN}` },
+    })
+  ).data.email;
+  const theirs = (
+    await admin(`/domains/${ctx.otherId}/emails`, {
+      method: 'POST',
+      body: { address: `elsewhere@${OTHER}` },
+    })
+  ).data.email;
+
+  const res = await admin(`/domains/${ctx.domainId}/emails/bulk-delete`, {
+    method: 'POST',
+    body: { ids: [mine.id, theirs.id], mode: 'portal' },
+  });
+
+  assert.equal(res.status, 404);
+  assert.match(res.data.error, /not listed for this domain/i);
+
+  // Nothing at all should have happened — least of all to the valid half.
+  const after = await admin(`/domains/${ctx.domainId}`);
+  assert.ok(after.data.emailAccounts.some((m) => m.id === mine.id), 'a rejected batch must delete nothing');
+
+  await admin(`/domains/${ctx.domainId}/emails/${mine.id}`, { method: 'DELETE' });
+  await admin(`/domains/${ctx.otherId}/emails/${theirs.id}`, { method: 'DELETE' });
+});
+
+test('a batch bigger than the limit is refused rather than half-run', async () => {
+  const res = await admin(`/domains/${ctx.domainId}/emails/bulk-delete`, {
+    method: 'POST',
+    body: { ids: Array.from({ length: 26 }, (_, i) => `id-${i}`), mode: 'portal' },
+  });
+
+  assert.equal(res.status, 400);
+  assert.match(JSON.stringify(res.data), /at most 25/i);
+});
+
+test('an empty selection is refused', async () => {
+  const res = await admin(`/domains/${ctx.domainId}/emails/bulk-delete`, {
+    method: 'POST',
+    body: { ids: [], mode: 'portal' },
+  });
+  assert.equal(res.status, 400);
+});
+
+test('an unknown mode is refused, so a typo cannot become a deletion', async () => {
+  const res = await admin(`/domains/${ctx.domainId}/emails/bulk-delete`, {
+    method: 'POST',
+    body: { ids: ['whatever'], mode: 'everything' },
+  });
+  assert.equal(res.status, 400);
+});
+
+test('a user cannot bulk-delete on a domain they are not assigned', async () => {
+  const res = await member(`/domains/${ctx.otherId}/emails/bulk-delete`, {
+    method: 'POST',
+    body: { ids: ['anything'], mode: 'portal' },
+  });
+  assert.equal(res.status, 404, 'bulk must not be a way around the per-domain check');
+});
+
+test('an assigned user may bulk-delete on their own domain', async () => {
+  // Same power as deleting them one at a time, which they already have.
+  const made = await provisionMany(2, 'bulk-user-');
+
+  const res = await member(`/domains/${ctx.domainId}/emails/bulk-delete`, {
+    method: 'POST',
+    body: { ids: made.map((m) => m.id), mode: 'provider' },
+  });
+
+  assert.equal(res.status, 200);
+  assert.equal(res.data.deleted, 2);
 });

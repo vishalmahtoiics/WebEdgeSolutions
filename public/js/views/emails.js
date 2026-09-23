@@ -4,6 +4,7 @@ import {
   createMailboxModal,
   passwordModal,
   deleteMailboxModal,
+  bulkDeleteMailboxesModal,
   emailModal,
 } from './mailbox-modals.js';
 
@@ -68,6 +69,8 @@ function domainCard(domain, isAdmin) {
   // Paired with the text to search on, so a domain with fifty mailboxes can be
   // narrowed to the one being looked for instead of scrolled through.
   const rows = domain.emails.map((m) => ({
+    id: m.id,
+    data: m,
     text: `${m.address} ${m.status || ''}`,
     node: el(
       'tr',
@@ -172,6 +175,19 @@ function domainCard(domain, isAdmin) {
             rows,
             noun: { one: 'mailbox', many: 'mailboxes' },
             searchPlaceholder: 'Search mailboxes…',
+            select: {
+              noun: { one: 'mailbox', many: 'mailboxes' },
+              actions: (chosen) => [
+                el(
+                  'button',
+                  {
+                    class: 'btn sm danger',
+                    onclick: () => bulkDeleteMailboxesModal(domain, chosen, domain.canManageEmail),
+                  },
+                  `Delete ${chosen.length}`,
+                ),
+              ],
+            },
           }),
         )
       : el(

@@ -12,6 +12,7 @@ import {
   createMailboxModal,
   passwordModal,
   deleteMailboxModal,
+  bulkDeleteMailboxesModal,
   emailModal,
 } from './mailbox-modals.js';
 
@@ -674,6 +675,8 @@ function emailPanel(data, isAdmin) {
   // Paired with the text to search on. A domain can easily hold fifty
   // mailboxes, and scrolling is not a way to find one.
   const rows = data.emailAccounts.map((m) => ({
+    id: m.id,
+    data: m,
     text: `${m.address} ${m.status || ''}`,
     node: el(
       'tr',
@@ -772,6 +775,19 @@ function emailPanel(data, isAdmin) {
             rows,
             noun: { one: 'mailbox', many: 'mailboxes' },
             searchPlaceholder: 'Search mailboxes…',
+            select: {
+              noun: { one: 'mailbox', many: 'mailboxes' },
+              actions: (chosen) => [
+                el(
+                  'button',
+                  {
+                    class: 'btn sm danger',
+                    onclick: () => bulkDeleteMailboxesModal(d, chosen, canWrite),
+                  },
+                  `Delete ${chosen.length}`,
+                ),
+              ],
+            },
           }),
         )
       : el(

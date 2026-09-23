@@ -892,6 +892,172 @@ domainsRouter.delete(
   }),
 );
 
+/// How many mailboxes one bulk-delete request may carry.
+///
+/// Not a limit on how many can be deleted — the browser sends larger
+/// selections in chunks — but a limit on how long one request can run. A
+/// request that is cut off halfway through deleting fifty real mailboxes
+/// leaves nobody able to say which ones went.
+const BULK_DELETE_LIMIT = 25;
+
+/// Deletes several mailboxes in one go.
+///
+/// Two modes, matching the two single-mailbox routes exactly — this is the
+/// same power with fewer clicks, never more:
+///
+///   portal   — forgets the portal's record. The mailbox itself is untouched
+///              and a sync brings it straight back.
+///   provider — destroys the mailbox and everything in it, for real.
+///
+/// A batch against a real API is not all-or-nothing, and pretending otherwise
+/// is how people end up believing mail was deleted when it was not. So each
+/// mailbox is done in turn and reported on by name: what went, what stayed,
+/// and why. The caller gets the list, not a number.
+const bulkDeleteSchema = z.object({
+  ids: z
+    .array(z.string().min(1))
+    .min(1, 'Select at least one mailbox.')
+    // The browser sends these in chunks so no single request runs long enough
+    // to be cut off halfway, which would leave nobody sure what happened.
+    .max(BULK_DELETE_LIMIT, `Delete at most ${BULK_DELETE_LIMIT} mailboxes per request.`),
+  mode: z.enum(['portal', 'provider']),
+});
+
+domainsRouter.post(
+  '/:id/emails/bulk-delete',
+  withDomain({ provider: true }),
+  validate(bulkDeleteSchema),
+  asyncHandler(async (req, res) => {
+    const { mode } = req.body;
+    // Duplicates in the list must not delete twice or be counted twice.
+    const ids = [...new Set(req.body.ids)];
+
+    const mailboxes = await prisma.emailAccount.findMany({
+      where: { id: { in: ids }, domainId: req.domain.id },
+    });
+
+    // An id that is not this domain's is not a silent no-op: someone asked for
+    // something that is not theirs to ask for, and should be told plainly.
+    const found = new Set(mailboxes.map((m) => m.id));
+    const missing = ids.filter((id) => !found.has(id));
+    if (missing.length) {
+      throw notFound(
+        missing.length === ids.length
+          ? 'None of those mailboxes are listed for this domain.'
+          : `${missing.length} of the selected mailboxes are not listed for this domain.`,
+      );
+    }
+
+    let adapter = null;
+    let token = null;
+    if (mode === 'provider') {
+      // Loaded once for the whole batch rather than per mailbox.
+      const live = mailboxes.filter((m) => m.externalId);
+      if (live.length) {
+        if (!req.domain.providerId) {
+          throw badRequest('This domain is not linked to a provider, so nothing can be deleted at one.');
+        }
+        ({ adapter, token } = await loadProviderWithToken(req.domain.providerId));
+        if (typeof adapter.deleteMailbox !== 'function') {
+          throw badRequest('This provider does not support deleting mailboxes through its API.');
+        }
+      }
+    }
+
+    const results = [];
+
+    for (const mailbox of mailboxes) {
+      // A mailbox that exists only here has nothing to destroy upstream, so
+      // "delete it" means the same thing in either mode. Doing it and saying
+      // so beats refusing the whole batch over one hand-entered row.
+      const atProvider = mode === 'provider' && Boolean(mailbox.externalId);
+
+      if (atProvider) {
+        try {
+          await adapter.deleteMailbox(token, mailbox.externalId);
+        } catch (err) {
+          results.push({
+            id: mailbox.id,
+            address: mailbox.address,
+            ok: false,
+            deletedAtProvider: false,
+            error: err.message,
+          });
+          // The next one may well work; one refusal is not a reason to stop.
+          continue;
+        }
+      }
+
+      // The local row goes only once the provider has confirmed, so a failure
+      // leaves the portal still showing what really exists.
+      await prisma.emailAccount.delete({ where: { id: mailbox.id } });
+      results.push({
+        id: mailbox.id,
+        address: mailbox.address,
+        ok: true,
+        deletedAtProvider: atProvider,
+        error: null,
+      });
+    }
+
+    const done = results.filter((r) => r.ok);
+    const failed = results.filter((r) => !r.ok);
+    const destroyed = done.filter((r) => r.deletedAtProvider);
+
+    if (done.length) {
+      const what = mode === 'provider' ? 'Permanently deleted' : 'Removed the portal record for';
+      await record({
+        event: mode === 'provider' ? 'email.mailbox.destroyed' : 'email.mailbox.removed',
+        actor: req.user,
+        domain: req.domain,
+        summary: `${what} ${done.length} mailbox${done.length === 1 ? '' : 'es'} on ${req.domain.name}`,
+        // Every address, by name. A count alone is not a record of what was
+        // deleted, and this is the only place that list will ever exist again.
+        detail: [
+          done.map((r) => r.address).join(', '),
+          destroyed.length
+            ? `${destroyed.length} of these were deleted at the provider, along with every message in them. This cannot be undone.`
+            : 'The mailboxes themselves were not touched; only this portal\u2019s records were removed.',
+          failed.length ? `${failed.length} could not be deleted: ${failed.map((r) => `${r.address} (${r.error})`).join('; ')}` : null,
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
+      });
+    }
+
+    res.json({
+      ok: failed.length === 0,
+      mode,
+      deleted: done.length,
+      destroyedAtProvider: destroyed.length,
+      failed: failed.length,
+      results,
+      message: buildBulkMessage({ mode, done: done.length, destroyed: destroyed.length, failed }),
+    });
+  }),
+);
+
+/// One sentence a person can act on, whatever mix of outcomes came back.
+function buildBulkMessage({ mode, done, destroyed, failed }) {
+  const box = (n) => `${n} mailbox${n === 1 ? '' : 'es'}`;
+
+  if (!done && failed.length) {
+    return failed.length === 1
+      ? `${failed[0].address} could not be deleted: ${failed[0].error}`
+      : `None of the ${box(failed.length)} could be deleted. The first reason given was: ${failed[0].error}`;
+  }
+
+  const head =
+    mode === 'provider'
+      ? destroyed === done
+        ? `Permanently deleted ${box(done)}.`
+        : `Deleted ${box(done)} \u2014 ${destroyed} at the provider, ${done - destroyed} that only existed in this portal.`
+      : `Removed ${box(done)} from the portal. The mailboxes themselves are untouched.`;
+
+  if (!failed.length) return head;
+  return `${head} ${box(failed.length)} could not be deleted \u2014 ${failed[0].address}: ${failed[0].error}`;
+}
+
 /// Forwarders, aliases, autoreplies and catch-alls, read live from the
 /// provider. Not stored, so they cannot go stale.
 domainsRouter.get(

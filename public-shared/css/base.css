@@ -811,6 +811,69 @@ td.right, th.right { text-align: right; }
    data: no hover, no pointer. */
 .table-view tbody tr.is-blank:hover { background: transparent; }
 
+/* --- Picking rows out --------------------------------------------------------
+
+   The checkbox column, and the bar of things you can do with what is ticked.
+--------------------------------------------------------------------------- */
+
+th.pick, td.pick {
+  width: 1%;
+  padding-right: 0;
+  white-space: nowrap;
+}
+
+/* The cell is the target, not the 13px box inside it. */
+td.pick { cursor: pointer; }
+th.pick input, td.pick input { display: block; margin: 0; cursor: pointer; }
+
+/* A ticked row is marked, so what is selected stays obvious while you scroll
+   a long table. Browsers without :has() lose the tint and nothing else — the
+   checkbox itself still says which rows are picked. */
+.table-view tbody tr:has(td.pick input:checked) { background: var(--brand-soft); }
+.table-view tbody tr:has(td.pick input:checked):hover { background: var(--brand-soft); }
+
+.table-bulk {
+  display: none;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.table-bulk.is-on { display: flex; }
+
+/* It appears where the eye already is — directly above the rows — rather than
+   floating over them and hiding one. */
+.table-bulk .strong { font-size: 13.5px; }
+
+@media (max-width: 640px) {
+  .table-bulk { padding: 10px 12px; }
+  .table-bulk .grow { flex-basis: 100%; height: 0; }
+}
+
+/* The full list of what a bulk action is about to touch. Scrolls rather than
+   being cut short: a list that says "and 34 more" is not something anybody can
+   check before pressing a button they cannot undo. */
+.bulk-list {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-inset);
+}
+
+.bulk-list-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13.5px;
+}
+.bulk-list-row:last-child { border-bottom: 0; }
+.bulk-list-row .mono { flex: 1; min-width: 0; }
+
 @media (max-width: 640px) {
   .table-tools { flex-wrap: wrap; }
   .table-tools .table-search { max-width: none; }
@@ -897,6 +960,11 @@ td.right, th.right { text-align: right; }
   background: var(--surface-2);
   flex-wrap: wrap;
 }
+
+/* A dialog that rewrites its own buttons keeps them in a group it owns. The
+   group itself must not become a flex item, or the buttons inside it would
+   stop being laid out by the footer. */
+.modal-foot .modal-actions { display: contents; }
 
 /* --- Toasts ------------------------------------------------------------------ */
 

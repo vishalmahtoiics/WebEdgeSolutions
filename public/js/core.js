@@ -157,16 +157,29 @@ const storedPageSize = (fallback) => readPageSize((k) => localStorage.getItem(k)
 const rememberPageSize = (size) => writePageSize((k, v) => localStorage.setItem(k, v), size);
 
 /// A table that pages, and searches once there is enough in it to be worth
-/// searching.
+/// searching, and picks rows out when it is given something to do with them.
 ///
-/// Rows arrive already built, as `{ node, text }`: `node` is the `<tr>` and
-/// `text` is whatever the search box should match. Paging then only moves
-/// existing nodes between the table and a holding array, so every button
-/// inside a row keeps the handler it was created with — nothing is rebuilt and
-/// nothing is re-fetched.
+/// Rows arrive already built, as `{ node, text, id, data }`: `node` is the
+/// `<tr>`, `text` is whatever the search box should match, and `id`/`data` are
+/// only needed when rows can be selected. Paging then only moves existing
+/// nodes between the table and a holding array, so every button inside a row
+/// keeps the handler it was created with — nothing is rebuilt and nothing is
+/// re-fetched.
 ///
-/// A plain `<tr>` is accepted in place of the pair; it simply never matches a
-/// search.
+/// A plain `<tr>` is accepted in place of the object; it simply never matches
+/// a search and can never be selected.
+///
+/// `select` turns on the checkbox column:
+///
+///   select: {
+///     noun: { one: 'mailbox', many: 'mailboxes' },
+///     actions: (chosen, { clear }) => [ el('button', …) ],
+///   }
+///
+/// `chosen` is the `data` of every selected row, in the order given. It holds
+/// rows that paging or a search has hidden, because unticking something by
+/// scrolling past it would be the worse surprise — so the count and the list
+/// shown to the reader must always be the true ones.
 export function tableView({
   head,
   rows,
@@ -178,6 +191,7 @@ export function tableView({
   // the server, and so sees more than the rows currently loaded. Two search
   // boxes over one table is a way to get two different answers.
   search: searchable = true,
+  select = null,
 }) {
   const items = rows.map((r) => (r instanceof Node ? { node: r, text: '' } : r));
 
@@ -190,6 +204,127 @@ export function tableView({
   const status = el('div', { class: 'small muted grow' });
   const pager = el('div', { class: 'table-pager' });
   const scroll = el('div', { class: 'table-scroll' }, table);
+
+  // --- Selection ------------------------------------------------------------
+  //
+  // Only the rows that carry an id can be picked; anything else is drawn with
+  // an empty cell rather than a checkbox that would do nothing.
+  const pickable = select ? items.filter((i) => i.id != null) : [];
+  const chosen = new Set();
+  const bar = el('div', { class: 'table-bulk' });
+  const headBox = el('input', {
+    type: 'checkbox',
+    'aria-label': `Select the ${select?.noun?.many || noun.many} on this page`,
+  });
+
+  const chosenItems = () => pickable.filter((i) => chosen.has(i.id));
+  const clearChoice = () => {
+    chosen.clear();
+    draw();
+  };
+
+  if (select) {
+    // The column header, added here rather than asked of every caller: a
+    // checkbox column that some tables forgot would be a column of rows that
+    // silently cannot be selected.
+    head.querySelector('tr')?.prepend(el('th', { class: 'pick' }, headBox));
+
+    for (const item of items) {
+      const cell = el('td', { class: 'pick' });
+      if (item.id != null) {
+        const box = el('input', {
+          type: 'checkbox',
+          'aria-label': `Select ${item.text || 'this row'}`,
+          onclick: (e) => {
+            // Several of these tables navigate when the row is clicked.
+            e.stopPropagation();
+          },
+          onchange: (e) => {
+            if (e.currentTarget.checked) chosen.add(item.id);
+            else chosen.delete(item.id);
+            drawSelection();
+          },
+        });
+        item.box = box;
+        cell.append(box);
+        // The whole cell is a target, so the checkbox is not a 13px thing to
+        // aim at on a phone.
+        cell.onclick = (e) => {
+          e.stopPropagation();
+          if (e.target !== box) box.click();
+        };
+      }
+      item.node.prepend(cell);
+    }
+  }
+
+  /// Redraws everything that depends on which rows are ticked, without
+  /// touching the table itself — so ticking a box never moves a row.
+  function drawSelection() {
+    if (!select) return;
+
+    for (const item of pickable) {
+      if (item.box) item.box.checked = chosen.has(item.id);
+    }
+
+    // The header box speaks for the page in front of you, not the whole list:
+    // "select everything" is offered separately and by name, below.
+    const onPage = visible.filter((i) => i.id != null);
+    const pickedHere = onPage.filter((i) => chosen.has(i.id)).length;
+    headBox.checked = onPage.length > 0 && pickedHere === onPage.length;
+    headBox.indeterminate = pickedHere > 0 && pickedHere < onPage.length;
+
+    const word = chosen.size === 1 ? select.noun?.one || noun.one : select.noun?.many || noun.many;
+    clear(bar);
+
+    if (!chosen.size) {
+      bar.classList.remove('is-on');
+      return;
+    }
+    bar.classList.add('is-on');
+
+    // Offered only when the page is full and there is more behind it, and
+    // worded with both numbers in it so neither can be mistaken for the other.
+    const matchingPickable = matching.filter((i) => i.id != null);
+    const offerAll =
+      pickedHere === onPage.length &&
+      onPage.length > 0 &&
+      chosen.size < matchingPickable.length;
+
+    appendAll(bar, [
+      el('span', { class: 'strong' }, `${chosen.size} ${word} selected`),
+      offerAll
+        ? el(
+            'button',
+            {
+              class: 'btn sm ghost',
+              onclick: () => {
+                for (const i of matchingPickable) chosen.add(i.id);
+                drawSelection();
+              },
+            },
+            `Select all ${matchingPickable.length}${query ? ' matching' : ''}`,
+          )
+        : null,
+      el('span', { class: 'grow' }),
+      select.actions(chosenItems().map((i) => i.data ?? { id: i.id }), { clear: clearChoice }),
+      el('button', { class: 'btn sm ghost', onclick: clearChoice }, 'Clear'),
+    ]);
+  }
+
+  headBox.onchange = () => {
+    const onPage = visible.filter((i) => i.id != null);
+    for (const item of onPage) {
+      if (headBox.checked) chosen.add(item.id);
+      else chosen.delete(item.id);
+    }
+    drawSelection();
+  };
+
+  // What the current page and the current search are showing, kept here so
+  // the selection code and the pager agree on it without recomputing.
+  let matching = items;
+  let visible = items;
 
   const search = el('input', {
     type: 'search',
@@ -231,15 +366,13 @@ export function tableView({
   );
 
   function draw() {
-    const matching = query
-      ? items.filter((i) => i.text.toLowerCase().includes(query))
-      : items;
+    matching = query ? items.filter((i) => i.text.toLowerCase().includes(query)) : items;
 
     const at = pageSlice(matching.length, page, size);
     page = at.page;
-    const slice = matching.slice(at.start, at.end);
+    visible = matching.slice(at.start, at.end);
 
-    fill(body, slice.map((i) => i.node));
+    fill(body, visible.map((i) => i.node));
 
     if (!matching.length) {
       fill(
@@ -249,7 +382,13 @@ export function tableView({
           { class: 'is-blank' },
           el(
             'td',
-            { colspan: String(head.querySelectorAll('th').length || 1), class: 'muted', style: 'text-align:center' },
+            {
+              // Counted after the checkbox column has been added, so the
+              // message stays centred under the whole table.
+              colspan: String(head.querySelectorAll('th').length || 1),
+              class: 'muted',
+              style: 'text-align:center',
+            },
             query ? `Nothing here matches “${search.value.trim()}”.` : 'Nothing to show.',
           ),
         ),
@@ -310,6 +449,9 @@ export function tableView({
         ),
       );
     }
+
+    // Last, because it reads `visible` and `matching` as this draw left them.
+    drawSelection();
   }
 
   draw();
@@ -318,6 +460,7 @@ export function tableView({
     'div',
     { class: 'table-view' },
     items.length > PAGE_SIZES[0] ? tools : null,
+    select ? bar : null,
     scroll,
     // With one short page and no search there is nothing to say: the rows are
     // all there, in front of the reader, and a count would just be noise.
