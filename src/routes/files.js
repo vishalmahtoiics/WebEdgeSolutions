@@ -817,8 +817,16 @@ filesRouter.post(
       checks.connect = folderProblem
         ? { ok: true, message: `Signed in over ${protocol}.` }
         : { ok: false, message };
+      // A full server path is what hosting panels show next to an FTP
+      // account, and it is the wrong thing to put here: an account made for
+      // one site is already locked inside that folder, so from its point of
+      // view the path does not exist.
+      const fullPathHint = /^\/home\//.test(root)
+        ? ' That looks like the full path on the server. An FTP account made for one site already starts ' +
+          'inside its folder, so try leaving Root folder blank.'
+        : '';
       checks.list = folderProblem
-        ? { ok: false, message: `Signed in, but could not read ${root}. ${message}` }
+        ? { ok: false, message: `Signed in, but could not read ${root}. ${message}${fullPathHint}` }
         : { ok: false, message: 'Not tried — the connection did not open.' };
     }
 

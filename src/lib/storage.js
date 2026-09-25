@@ -31,6 +31,13 @@ export function resolvePath(root, requested = '/') {
   const base = path.posix.resolve('/', root || '/');
   const joined = path.posix.resolve(base, `.${path.posix.resolve('/', requested)}`);
 
+  // Everything is inside "/", so a root of "/" confines nothing further —
+  // and "/" plus "/" is "//", which no real path starts with. Checking for
+  // that prefix refused every folder below the top whenever the root was
+  // left at "/", which is exactly what an FTP account that is already
+  // locked to its own directory (Hostinger's, for one) needs.
+  if (base === '/') return joined;
+
   if (joined !== base && !joined.startsWith(`${base}/`)) {
     throw new StorageError('That path is outside the allowed directory.', 403);
   }
@@ -40,6 +47,7 @@ export function resolvePath(root, requested = '/') {
 /// The path to show the user: relative to the root, so the root looks like "/".
 export function toDisplayPath(root, absolute) {
   const base = path.posix.resolve('/', root || '/');
+  if (base === '/') return absolute;
   if (absolute === base) return '/';
   return absolute.startsWith(`${base}/`) ? absolute.slice(base.length) : absolute;
 }

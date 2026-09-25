@@ -781,3 +781,39 @@ test('a settings form drawn before the last save cannot overwrite it', async () 
   assert.match(logged.detail, /Fields changed: ftpHost/);
   assert.match(logged.detail, /Fields emptied: ftpUsername/);
 });
+
+// --- An FTP account that is already locked to its own folder ----------------
+
+test('with the root left at "/", folders below the top can be opened and used', async () => {
+  // How an FTP account made for one site works: its "/" is the site folder,
+  // so there is nothing to put in Root folder. Every folder below the top
+  // used to be refused as "outside the allowed directory".
+  const row = await prisma.domainSettings.findUnique({ where: { domainId: ctx.domainId } });
+  await prisma.domainSettings.update({ where: { domainId: ctx.domainId }, data: { ftpRootPath: null } });
+  try {
+    const top = await admin(`/domains/${ctx.domainId}/files?path=/`);
+    assert.equal(top.status, 200);
+    assert.ok(top.data.entries.some((e) => e.name === 'public_html'));
+
+    const inner = await admin(`/domains/${ctx.domainId}/files?path=/public_html/css`);
+    assert.equal(inner.status, 200, inner.data?.error);
+    assert.equal(inner.data.path, '/public_html/css');
+
+    const opened = await admin(`/domains/${ctx.domainId}/files/content?path=/public_html/css/main.css`);
+    assert.equal(opened.status, 200, opened.data?.error);
+
+    const saved = await admin(`/domains/${ctx.domainId}/files/content`, {
+      method: 'PUT',
+      body: { path: '/public_html/css/main.css', content: 'body{color:red}' },
+    });
+    assert.equal(saved.status, 200, saved.data?.error);
+    assert.equal(await fs.readFile(path.join(siteRoot, 'css', 'main.css'), 'utf8'), 'body{color:red}');
+
+    // Climbing is still clamped to the account's own "/".
+    const climbed = await admin(`/domains/${ctx.domainId}/files?path=/../../..`);
+    assert.equal(climbed.status, 200);
+    assert.equal(climbed.data.path, '/');
+  } finally {
+    await prisma.domainSettings.update({ where: { domainId: ctx.domainId }, data: { ftpRootPath: row.ftpRootPath } });
+  }
+});

@@ -1169,7 +1169,9 @@ function settingsPanel(data) {
           field(
             'Root folder',
             inputs.ftpRootPath,
-            'The file manager is confined to this folder. Usually /public_html. Leave blank for the login directory.',
+            'The folder as this FTP account sees it — not the full path on the server. An FTP account made for one ' +
+              'site (its directory shows as something like /home/…/public_html) already starts inside that folder, ' +
+              'so leave this blank. For the main account, use /public_html or /domains/yoursite.com/public_html.',
           ),
           ftpTest(d, inputs),
         ),
