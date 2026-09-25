@@ -428,7 +428,12 @@ function realOrCustom({ label, realValue, overrideValue, unit = 'MB' }) {
   };
 }
 
-export function emailModal(domainId, mailbox = null) {
+export function emailModal(domainId, mailbox = null, { isAdmin = true } = {}) {
+  // A customer can list a mailbox and keep a note on it, and that is all:
+  // its address, status and size are the administrator's to set, and the
+  // server refuses them from anyone else.
+  if (!isAdmin) return customerMailboxModal(domainId, mailbox);
+
   const address = el('input', { type: 'email', value: mailbox?.address || '' });
   const status = el(
     'select',
@@ -507,6 +512,41 @@ export function emailModal(domainId, mailbox = null) {
             )
           : el('div', { class: 'form-row' }, field('Quota (MB)', plainQuota), field('Used (MB)', plainUsed)),
         field('Notes', notes),
+      ),
+    footer: (closeFn) => [el('button', { class: 'btn', onclick: closeFn }, 'Cancel'), save],
+  });
+}
+
+/// The customer's version of the dialog above: the address (fixed once the
+/// mailbox exists) and a note. No size, no usage, no status.
+function customerMailboxModal(domainId, mailbox) {
+  const editing = Boolean(mailbox);
+  const address = el('input', { type: 'email', value: mailbox?.address || '', disabled: editing });
+  const notes = el('textarea', {}, mailbox?.notes || '');
+  const alertHost = el('div');
+  const save = el('button', { class: 'btn primary' }, editing ? 'Save note' : 'Add mailbox');
+
+  save.onclick = submitHandler(save, alertHost, async () => {
+    const body = { address: address.value.trim().toLowerCase(), notes: notes.value.trim() };
+    const path = editing ? `/domains/${domainId}/emails/${mailbox.id}` : `/domains/${domainId}/emails`;
+    await api(path, { method: editing ? 'PUT' : 'POST', body });
+    toast(editing ? 'Note saved.' : 'Mailbox added.', 'ok');
+    close();
+    refresh();
+  });
+
+  const close = openModal({
+    title: editing ? mailbox.address : 'Add Mailbox',
+    render: () =>
+      el(
+        'div',
+        {},
+        alertHost,
+        field('Email address', address),
+        field('Notes', notes),
+        editing
+          ? el('p', { class: 'muted small', style: 'margin-bottom:0' }, 'The size of a mailbox is set by your administrator.')
+          : null,
       ),
     footer: (closeFn) => [el('button', { class: 'btn', onclick: closeFn }, 'Cancel'), save],
   });

@@ -910,3 +910,25 @@ button.files-crumb:hover { background: var(--surface-3); color: var(--ink); }
 
   @page { margin: 14mm; }
 }
+
+/* --- Mailbox allowance ---------------------------------------------------------------
+
+   Above the mailbox list: how many the plan includes, how many are used, and
+   — for a customer — the way to ask for more.
+------------------------------------------------------------------------------------- */
+
+.limit-bar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 12px 18px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.limit-bar.is-full { background: var(--warn-soft); }
+.limit-bar .strong { font-size: 14.5px; }
+.limit-cta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
+.limit-meter {
+  height: 6px; max-width: 320px; margin-top: 8px;
+  border-radius: 99px; background: var(--surface-3); overflow: hidden;
+}
+.limit-meter span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--brand), var(--brand-2)); }
+.limit-bar.is-full .limit-meter span { background: var(--warn); }

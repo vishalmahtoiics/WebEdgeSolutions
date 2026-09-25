@@ -7,8 +7,9 @@ import connectPgSimple from 'connect-pg-simple';
 
 import { config, isProd } from './config.js';
 import { prisma } from './db.js';
-import { loadUser } from './middleware/auth.js';
+import { loadUser, isAdmin } from './middleware/auth.js';
 import { HttpError } from './lib/errors.js';
+import { whiteLabelResponses, maskError } from './lib/whiteLabel.js';
 import { authRouter } from './routes/auth.js';
 import { providersRouter } from './routes/providers.js';
 import { domainsRouter } from './routes/domains.js';
@@ -80,6 +81,10 @@ app.use(
 );
 
 app.use(loadUser);
+
+// The provider's name never reaches a customer: every response to someone
+// who is not Super Admin has it replaced with ours. See lib/whiteLabel.js.
+app.use('/api', whiteLabelResponses(isAdmin));
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 app.use('/api/auth', authRouter);
@@ -220,12 +225,16 @@ app.get('*', (req, res) => {
 
 // Error handler. Client errors carry their message through; anything else is
 // logged server-side and reported generically so internals do not leak.
-app.use((err, _req, res, _next) => {
+app.use((err, req, res, _next) => {
+  // A provider's error, passed through as-is, names the provider — "[Domains:
+  // 2006] Domain is not registered at Hostinger." The Super Admin needs that
+  // wording; a customer gets it with our name instead, and without the code.
+  const shown = (message) => (isAdmin(req.user) ? message : maskError(message));
   if (err instanceof HttpError) {
-    return res.status(err.status).json({ error: err.message, details: err.details });
+    return res.status(err.status).json({ error: shown(err.message), details: err.details });
   }
   if (err?.status && err.status < 500) {
-    return res.status(err.status).json({ error: err.message });
+    return res.status(err.status).json({ error: shown(err.message) });
   }
   // Turn the two Prisma failures that actually strand a deployment into an
   // instruction, so the container log says what to do rather than just what

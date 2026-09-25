@@ -1,9 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import rateLimit from 'express-rate-limit';
 import { prisma } from '../db.js';
 import { validate } from '../middleware/validate.js';
 import { requireAuth, requireAdmin, getAccessibleDomain, isAdmin } from '../middleware/auth.js';
 import { asyncHandler, badRequest, notFound, HttpError } from '../lib/errors.js';
+import { unmaskAgainst } from '../lib/whiteLabel.js';
 import { getAdapter, tryCapability } from '../providers/index.js';
 import { encrypt, decryptMaybe, tokenHint } from '../lib/crypto.js';
 import { loadProviderWithToken } from '../services/providerService.js';
@@ -215,8 +217,130 @@ domainsRouter.get(
       mailSetup: admin ? setup : forCustomer,
       dnsRecords: d.dnsRecords.map((r) => presentDnsRecord(r, admin)),
       emailAccounts: d.emailAccounts.map((m) => presentEmailAccount(m, admin)),
+      mailboxLimit: mailboxLimitOf(d.settings, d.emailAccounts.length),
       assignedUsers: admin ? d.assignments.map((a) => a.user) : undefined,
     });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// How many mailboxes a plan includes
+// ---------------------------------------------------------------------------
+
+/// `{ max, used, remaining }`, where `max` null means no limit. Everyone sees
+/// it: a customer needs to know how many they have left before trying.
+function mailboxLimitOf(settings, used) {
+  const max = settings?.maxMailboxes ?? null;
+  return { max, used, remaining: max === null ? null : Math.max(0, max - used) };
+}
+
+/// Refuses a new mailbox from a customer whose plan has none left. A Super
+/// Admin is not held to it — they set it, and may go past it on purpose —
+/// but a customer is, whether they create the mailbox for real or only list
+/// one here.
+async function assertMailboxRoom(req) {
+  if (isAdmin(req.user)) return;
+  const settings = await prisma.domainSettings.findUnique({ where: { domainId: req.domain.id } });
+  const limit = mailboxLimitOf(settings, await prisma.emailAccount.count({ where: { domainId: req.domain.id } }));
+  if (limit.max !== null && limit.remaining === 0) {
+    throw new HttpError(
+      403,
+      `Your plan includes ${limit.max} mailbox${limit.max === 1 ? '' : 'es'}, and all of them are in use. ` +
+        'To add more, ask for a bigger plan.',
+      { code: 'MAILBOX_LIMIT', max: limit.max, used: limit.used },
+    );
+  }
+}
+
+/// Sets the limit. Super Admin only.
+domainsRouter.put(
+  '/:id/mailbox-limit',
+  requireAdmin,
+  withDomain({ settings: true }),
+  validate(
+    z.object({
+      max: z.coerce.number().int().min(0, 'The limit cannot be negative.').max(100000).nullable(),
+    }),
+  ),
+  asyncHandler(async (req, res) => {
+    const before = req.domain.settings?.maxMailboxes ?? null;
+    const settings = await prisma.domainSettings.upsert({
+      where: { domainId: req.domain.id },
+      create: { domainId: req.domain.id, maxMailboxes: req.body.max },
+      update: { maxMailboxes: req.body.max },
+    });
+
+    await record({
+      event: 'settings.domain.mailbox-limit',
+      actor: req.user,
+      domain: req.domain,
+      summary:
+        req.body.max === null
+          ? `Removed the mailbox limit for ${req.domain.name}`
+          : `Set the mailbox limit for ${req.domain.name} to ${req.body.max}`,
+      detail: `Was ${before === null ? 'no limit' : before}.`,
+    });
+
+    const used = await prisma.emailAccount.count({ where: { domainId: req.domain.id } });
+    res.json({ ok: true, mailboxLimit: mailboxLimitOf(settings, used) });
+  }),
+);
+
+/// One request per customer per few minutes is plenty; this sends an email
+/// to whoever runs the portal, and a stuck button should not send ten.
+const upgradeLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 3,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.user?.id || req.ip,
+  message: { error: 'Your request has already been sent. We will be in touch soon.' },
+});
+
+const upgradeSchema = z.object({
+  wanted: z.string().trim().max(120).optional().or(z.literal('')),
+  phone: z
+    .string()
+    .trim()
+    .max(24)
+    .regex(/^[+0-9][0-9\s-]*$/, 'Enter a valid phone number.')
+    .optional()
+    .or(z.literal('')),
+  message: z.string().trim().max(1000).optional().or(z.literal('')),
+});
+
+/// A customer asking for a bigger plan. Nothing changes here: it is recorded
+/// and emailed to the portal's notification address (as an order alert), and
+/// a person takes it from there.
+domainsRouter.post(
+  '/:id/upgrade-request',
+  withDomain({ settings: true }),
+  upgradeLimiter,
+  validate(upgradeSchema),
+  asyncHandler(async (req, res) => {
+    const used = await prisma.emailAccount.count({ where: { domainId: req.domain.id } });
+    const limit = mailboxLimitOf(req.domain.settings, used);
+    const b = req.body;
+
+    await record({
+      event: 'order.upgrade-requested',
+      actor: req.user,
+      domain: req.domain,
+      summary: `${req.user.name} asked for a bigger plan`,
+      detail: [
+        `Customer: ${req.user.name} <${req.user.email}>`,
+        b.phone ? `Phone:    ${b.phone}` : null,
+        `Mailboxes: ${used} in use${limit.max === null ? ', no limit set' : ` of ${limit.max} included`}`,
+        b.wanted ? `Wants:    ${b.wanted}` : null,
+        b.message ? `\nThey said: ${b.message}` : null,
+        '\nRaise the limit on the domain\'s Emails tab once the new plan is sorted.',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      ip: req.ip,
+    });
+
+    res.status(201).json({ ok: true, message: 'Request sent. We will get in touch with you shortly.' });
   }),
 );
 
@@ -682,6 +806,27 @@ const dnsSchema = z.object({
   ttl: z.coerce.number().int().min(60).max(604800).default(3600),
 });
 
+/// A customer reads provider hostnames in DNS records as ours
+/// (mx1.webedgesolutions.com for mx1.hostinger.com — see lib/whiteLabel.js).
+/// Whatever they send back is translated to the real names before it is
+/// written, or saving an MX record unchanged would point the domain's mail at
+/// a server that does not exist. Only names that the domain's own records
+/// actually show are translated, so a hostname of ours typed on purpose is
+/// left as typed.
+async function realDnsInput(req) {
+  if (isAdmin(req.user)) return req.body;
+  const records = await prisma.dnsRecord.findMany({
+    where: { domainId: req.domain.id },
+    select: { name: true, content: true },
+  });
+  const known = records.flatMap((r) => [r.name, r.content]);
+  return {
+    ...req.body,
+    name: unmaskAgainst(req.body.name, known),
+    content: unmaskAgainst(req.body.content, known),
+  };
+}
+
 /// These three go to the real DNS zone when the domain has one that accepts
 /// changes, and to the portal alone when it does not. The service decides
 /// which, and the reply says which happened — editing an MX record for real is
@@ -691,7 +836,7 @@ domainsRouter.post(
   withDomain(),
   validate(dnsSchema),
   asyncHandler(async (req, res) => {
-    const result = await createDnsRecord(req.domain, req.body, req.user);
+    const result = await createDnsRecord(req.domain, await realDnsInput(req), req.user);
     res.status(201).json(result);
   }),
 );
@@ -705,7 +850,7 @@ domainsRouter.put(
       where: { id: req.params.recordId, domainId: req.domain.id },
     });
     if (!existing) throw notFound('DNS record not found.');
-    res.json(await updateDnsRecord(req.domain, existing, req.body, req.user));
+    res.json(await updateDnsRecord(req.domain, existing, await realDnsInput(req), req.user));
   }),
 );
 
@@ -772,11 +917,26 @@ function mailboxValues(body, { hasProvider }) {
   return data;
 }
 
+/// A mailbox's size, and what it reports as used, are part of what the
+/// customer is paying for, so only a Super Admin sets them. A customer
+/// sending them is told so rather than having them silently dropped — a
+/// dialog that says "saved" while ignoring half of it is worse than one that
+/// says no.
+const SIZE_FIELDS = ['quotaMb', 'usedMb', 'useRealQuota', 'useRealUsed'];
+function refuseSizeChangeByUser(req) {
+  if (isAdmin(req.user)) return;
+  if (SIZE_FIELDS.some((k) => req.body[k] !== undefined && req.body[k] !== null)) {
+    throw new HttpError(403, "Only your administrator can change a mailbox's size.");
+  }
+}
+
 domainsRouter.post(
   '/:id/emails',
   withDomain(),
   validate(emailSchema),
   asyncHandler(async (req, res) => {
+    refuseSizeChangeByUser(req);
+    await assertMailboxRoom(req);
     const exists = await prisma.emailAccount.findUnique({
       where: { domainId_address: { domainId: req.domain.id, address: req.body.address } },
     });
@@ -804,14 +964,20 @@ domainsRouter.put(
     });
     if (!existing) throw notFound('Mailbox not found.');
 
+    refuseSizeChangeByUser(req);
+
     // Editing no longer detaches the row from the provider: the real values
     // keep refreshing underneath whatever an administrator chose to display.
+    // A customer's edit touches the note and nothing else: the address,
+    // status and size of a mailbox are the administrator's to set.
     const email = await prisma.emailAccount.update({
       where: { id: existing.id },
-      data: {
-        address: req.body.address,
-        ...mailboxValues(req.body, { hasProvider: Boolean(existing.externalId) }),
-      },
+      data: isAdmin(req.user)
+        ? {
+            address: req.body.address,
+            ...mailboxValues(req.body, { hasProvider: Boolean(existing.externalId) }),
+          }
+        : { notes: req.body.notes === '' ? null : req.body.notes ?? existing.notes },
     });
     res.json({ email: presentEmailAccount(email, isAdmin(req.user)) });
   }),
@@ -842,6 +1008,8 @@ domainsRouter.post(
   withDomain({ provider: true }),
   validate(createEmailSchema),
   asyncHandler(async (req, res) => {
+    refuseSizeChangeByUser(req);
+    await assertMailboxRoom(req);
     const domain = req.domain;
     const { address, password } = req.body;
 

@@ -715,7 +715,7 @@ function emailPanel(data, isAdmin) {
           'Open inbox',
         ),
         ' ',
-        el('button', { class: 'btn sm', onclick: () => emailModal(d.id, m) }, 'Edit'),
+        el('button', { class: 'btn sm', onclick: () => emailModal(d.id, m, { isAdmin }) }, isAdmin ? 'Edit' : 'Note'),
         ' ',
         // Password and provider deletion only mean anything for a mailbox that
         // actually exists at the provider.
@@ -729,6 +729,13 @@ function emailPanel(data, isAdmin) {
       ),
     ),
   }));
+
+  // How many the plan includes. A customer at the limit cannot add more and
+  // is shown how to ask for a bigger plan; a Super Admin is not held to it,
+  // and gets the control that sets it.
+  const limit = data.mailboxLimit || { max: null, used: data.emailAccounts.length, remaining: null };
+  const full = !isAdmin && limit.max !== null && limit.remaining === 0;
+  const limitBanner = isAdmin ? mailboxLimitControl(d, limit) : mailboxLimitNotice(d, limit);
 
   const panel = el('div');
   const mailboxCard = el(
@@ -752,11 +759,12 @@ function emailPanel(data, isAdmin) {
         ),
       ),
       canSync ? syncBtn : null,
-      el('button', { class: 'btn', onclick: () => emailModal(d.id) }, '+ Track Manually'),
+      el('button', { class: 'btn', disabled: full, onclick: () => emailModal(d.id, null, { isAdmin }) }, '+ Track Manually'),
       canWrite
-        ? el('button', { class: 'btn primary', onclick: () => createMailboxModal(d) }, '+ Create Mailbox')
+        ? el('button', { class: 'btn primary', disabled: full, onclick: () => createMailboxModal(d) }, '+ Create Mailbox')
         : null,
     ),
+    limitBanner,
     data.emailAccounts.length
       ? el(
           'div',
@@ -817,6 +825,134 @@ function emailPanel(data, isAdmin) {
   if (isAdmin && d.provider && data.capabilities?.emailExtras) panel.append(emailExtrasCard(d));
   return panel;
 }
+
+/// The customer's view of their mailbox allowance, above the list.
+function mailboxLimitNotice(domain, limit) {
+  if (limit.max === null) return null;
+  const full = limit.remaining === 0;
+  const plural = (n) => `${n} mailbox${n === 1 ? '' : 'es'}`;
+
+  return el(
+    'div',
+    { class: `limit-bar ${full ? 'is-full' : ''}` },
+    el(
+      'div',
+      { class: 'grow' },
+      el('div', { class: 'strong' }, `Your plan includes ${plural(limit.max)}`),
+      el(
+        'div',
+        { class: 'small muted' },
+        full
+          ? `All ${limit.max} are in use. You cannot create more on this plan.`
+          : `${limit.used} in use — you can create ${limit.remaining} more.`,
+      ),
+      el(
+        'div',
+        { class: 'limit-meter', 'aria-hidden': 'true' },
+        el('span', { style: `width:${Math.min(100, (limit.used / Math.max(1, limit.max)) * 100)}%` }),
+      ),
+    ),
+    el(
+      'div',
+      { class: 'limit-cta' },
+      el('span', { class: 'small muted hide-sm' }, full ? 'Need more?' : 'Want more?'),
+      el('button', { class: `btn sm ${full ? 'primary' : ''}`, onclick: () => upgradeModal(domain, limit) }, 'Buy a bigger plan'),
+    ),
+  );
+}
+
+/// The Super Admin's view: the same figures, and the control that sets them.
+function mailboxLimitControl(domain, limit) {
+  const input = el('input', {
+    type: 'number',
+    min: 0,
+    value: limit.max ?? '',
+    placeholder: 'No limit',
+    style: 'width:110px',
+    'aria-label': 'Mailbox limit',
+  });
+  const save = el('button', { class: 'btn sm' }, 'Save limit');
+  const describe = (l) => (l.max === null ? `${l.used} in use, no limit set` : `${l.used} of ${l.max} in use`);
+  const status = el('span', { class: 'small muted' }, describe(limit));
+
+  save.onclick = async () => {
+    save.disabled = true;
+    try {
+      const max = input.value === '' ? null : Number(input.value);
+      const res = await api(`/domains/${domain.id}/mailbox-limit`, { method: 'PUT', body: { max } });
+      status.textContent = describe(res.mailboxLimit);
+      toast(max === null ? 'Mailbox limit removed.' : `Mailbox limit set to ${max}.`, 'ok');
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      save.disabled = false;
+    }
+  };
+
+  return el(
+    'div',
+    { class: 'limit-bar' },
+    el(
+      'div',
+      { class: 'grow' },
+      el('div', { class: 'strong' }, 'Mailboxes on this plan'),
+      el(
+        'div',
+        { class: 'small muted' },
+        'How many the customer may create. Leave empty for no limit. You are not held to it yourself.',
+      ),
+    ),
+    el('div', { class: 'limit-cta' }, input, save, status),
+  );
+}
+
+/// A customer asking for a bigger plan. Sent to whoever runs the portal as an
+/// alert; nothing about the plan changes until a person acts on it.
+function upgradeModal(domain, limit) {
+  const wanted = el('input', { type: 'text', placeholder: 'e.g. 10 mailboxes, or the Business plan' });
+  const phone = el('input', { type: 'tel', placeholder: '+91 98765 43210', autocomplete: 'tel' });
+  const message = el('textarea', { placeholder: 'Anything we should know (optional)' });
+  const alertHost = el('div');
+  const send = el('button', { class: 'btn primary' }, 'Send request');
+  const cancel = el('button', { class: 'btn' }, 'Cancel');
+
+  const body = el(
+    'div',
+    {},
+    alertHost,
+    el(
+      'p',
+      { class: 'muted', style: 'margin-top:0' },
+      limit.max === null
+        ? `Tell us what you need for ${domain.name} and we will get back to you.`
+        : `Your plan for ${domain.name} includes ${limit.max} mailbox${limit.max === 1 ? '' : 'es'} and ${limit.used} ` +
+            `${limit.used === 1 ? 'is' : 'are'} in use. Tell us what you need and we will get back to you with the options.`,
+    ),
+    field('What do you need?', wanted),
+    field('Phone number', phone, 'So we can reach you quickly. Optional.'),
+    field('Message', message),
+  );
+
+  send.onclick = submitHandler(send, alertHost, async () => {
+    const res = await api(`/domains/${domain.id}/upgrade-request`, {
+      method: 'POST',
+      body: { wanted: wanted.value.trim(), phone: phone.value.trim(), message: message.value.trim() },
+    });
+    clear(body).append(el('div', { class: 'alert ok', style: 'margin:0' }, res.message));
+    send.remove();
+    clear(cancel).append('Close');
+  });
+
+  openModal({
+    title: 'Ask for a bigger plan',
+    render: () => body,
+    footer: (closeFn) => {
+      cancel.onclick = closeFn;
+      return [cancel, send];
+    },
+  });
+}
+
 
 /// What to type into Outlook, a phone, or anything else that speaks IMAP.
 ///

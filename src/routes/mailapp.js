@@ -21,6 +21,8 @@ import {
   deleteMessage, moveMessage, setSeen, setFlagged,
   sendMessage, appendToSent, verifySmtp, MailError,
 } from '../lib/mail.js';
+import { maskError } from '../lib/whiteLabel.js';
+import { isAdmin } from '../middleware/auth.js';
 
 export const mailAppRouter = Router();
 
@@ -454,7 +456,7 @@ mailAppRouter.post(
 );
 
 /// Mail failures become ordinary HTTP errors.
-mailAppRouter.use((err, _req, res, next) => {
-  if (err instanceof MailError) return res.status(err.status).json({ error: err.message });
+mailAppRouter.use((err, req, res, next) => {
+  if (err instanceof MailError) return res.status(err.status).json({ error: isAdmin(req.user) ? err.message : maskError(err.message) });
   next(err);
 });

@@ -17,7 +17,7 @@
 
 import {
   flattenZone, addRecord, removeRecord, updateRecord,
-  assertSafeWrite, hasRecord, countRecords, ZoneError,
+  assertSafeWrite, hasRecord, sameRecord, countRecords, ZoneError,
 } from '../lib/dnsZone.js';
 
 // Overridable so the integration tests can point the adapter at a local stub
@@ -524,7 +524,10 @@ export const hostingerAdapter = {
       // One out, one in.
       expectedDelta: 0,
       minimumBefore,
-      verify: (zone) => hasRecord(zone, after) && !hasRecord(zone, before),
+      // The old value must be gone — unless it is the new value too, as it
+      // is when only the TTL changed. Checking "gone" then failed every
+      // TTL-only edit, and every save of a record left as it was.
+      verify: (zone) => hasRecord(zone, after) && (sameRecord(before, after) || !hasRecord(zone, before)),
     });
   },
 

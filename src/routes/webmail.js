@@ -21,6 +21,8 @@ import {
   verifySmtp,
   MailError,
 } from '../lib/mail.js';
+import { maskError } from '../lib/whiteLabel.js';
+import { isAdmin } from '../middleware/auth.js';
 
 export const webmailRouter = Router({ mergeParams: true });
 
@@ -283,9 +285,9 @@ webmailRouter.post(
 );
 
 /// Turns mail failures into ordinary HTTP errors.
-webmailRouter.use((err, _req, res, next) => {
+webmailRouter.use((err, req, res, next) => {
   if (err instanceof MailError) {
-    return res.status(err.status).json({ error: err.message });
+    return res.status(err.status).json({ error: isAdmin(req.user) ? err.message : maskError(err.message) });
   }
   next(err);
 });

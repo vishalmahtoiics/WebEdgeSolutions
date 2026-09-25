@@ -172,3 +172,10 @@ export function assertSafeWrite(before, after, { expectedDelta, minimumBefore = 
 /// there rather than against what a page was showing a minute ago.
 export const hasRecord = (groups, { name, type, content }) =>
   entriesOf(findGroup(groups || [], name, type)).some((e) => sameContent(e?.content, content));
+
+/// Whether two records are one and the same — name, type and value — as
+/// they are when an edit changes only the TTL. Compared the way the zone
+/// itself compares them, so "@" and a quoted TXT value match as they would
+/// there.
+export const sameRecord = (a, b) =>
+  hasRecord([{ name: a.name, type: a.type, records: [{ content: a.content }] }], b);

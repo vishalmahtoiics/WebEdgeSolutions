@@ -23,6 +23,7 @@ import {
 } from '../lib/database.js';
 import { SqlError, KIND } from '../lib/sqlStatement.js';
 import { record } from '../services/notifier.js';
+import { maskError } from '../lib/whiteLabel.js';
 
 export const databaseRouter = Router({ mergeParams: true });
 
@@ -313,9 +314,9 @@ databaseRouter.get(
 
 /// Database failures become ordinary HTTP errors, keeping their explanation —
 /// especially the Remote MySQL one, which is the answer most of the time.
-databaseRouter.use((err, _req, res, next) => {
+databaseRouter.use((err, req, res, next) => {
   if (err instanceof DatabaseError || err instanceof SqlError) {
-    return res.status(err.status).json({ error: err.message });
+    return res.status(err.status).json({ error: isAdmin(req.user) ? err.message : maskError(err.message) });
   }
   next(err);
 });

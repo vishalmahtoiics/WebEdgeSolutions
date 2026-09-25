@@ -285,6 +285,10 @@ model DomainSettings {
   publicSmtpHost String?
   publicSmtpPort Int?
 
+  /// How many mailboxes the customer may have on this domain — part of what
+  /// their plan includes. Set by a Super Admin; null means no limit.
+  maxMailboxes Int?
+
   /// MySQL / MariaDB access. The provider API does not hand these out, so they
   /// are entered by hand, the same way FTP is. The password is encrypted at
   /// rest and never sent to the browser.
