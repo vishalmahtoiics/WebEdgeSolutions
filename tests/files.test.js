@@ -12,6 +12,8 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { FtpSrv } from 'ftp-srv';
 import { PrismaClient } from '@prisma/client';
+import { buildZip } from '../src/lib/zipWriter.js';
+import { readZip } from '../src/lib/archive.js';
 
 // Surface anything that escapes a test, since the runner otherwise reports a
 // bare non-zero exit with no explanation.
@@ -446,4 +448,336 @@ test('a domain with no FTP details says so clearly', async () => {
   const { status, data } = await admin(`/domains/${ctx.otherId}/files`);
   assert.equal(status, 400);
   assert.match(data.error, /not set up/i);
+});
+
+// --- The editor puts back what it found -------------------------------------
+
+const exists = (p) => fs.stat(p).then(() => true, () => false);
+
+test('a file larger than an ordinary request can still be saved', async () => {
+  // Between the general 256 KB body limit and the editor's 512 KB: this used
+  // to open fine and then fail to save with "request entity too large".
+  const big = `${'/* padding */\n'.repeat(28000)}`;
+  assert.ok(big.length > 300 * 1024 && big.length < 512 * 1024);
+  await fs.writeFile(path.join(siteRoot, 'big.css'), big);
+
+  const opened = await admin(`/domains/${ctx.domainId}/files/content?path=/big.css`);
+  assert.equal(opened.status, 200);
+
+  const saved = await admin(`/domains/${ctx.domainId}/files/content`, {
+    method: 'PUT',
+    body: { path: '/big.css', content: `${opened.data.content}/* edited */\n` },
+  });
+  assert.equal(saved.status, 200, saved.data?.error);
+  assert.match(await fs.readFile(path.join(siteRoot, 'big.css'), 'utf8'), /\/\* edited \*\/\n$/);
+});
+
+test('a Latin-1 file is saved back as Latin-1, not mangled into UTF-8', async () => {
+  await fs.writeFile(path.join(siteRoot, 'old.txt'), Buffer.from('café\n', 'latin1'));
+
+  const opened = await admin(`/domains/${ctx.domainId}/files/content?path=/old.txt`);
+  assert.equal(opened.data.encoding, 'latin1');
+  assert.equal(opened.data.content, 'café\n', 'read as the characters it holds, not as replacement marks');
+
+  const saved = await admin(`/domains/${ctx.domainId}/files/content`, {
+    method: 'PUT',
+    body: { path: '/old.txt', content: 'café crème\n', encoding: 'latin1' },
+  });
+  assert.equal(saved.status, 200);
+  assert.deepEqual(await fs.readFile(path.join(siteRoot, 'old.txt')), Buffer.from('café crème\n', 'latin1'));
+});
+
+test('a character Latin-1 cannot hold is refused rather than written wrong', async () => {
+  const res = await admin(`/domains/${ctx.domainId}/files/content`, {
+    method: 'PUT',
+    body: { path: '/old.txt', content: 'price ₹100\n', encoding: 'latin1' },
+  });
+  assert.equal(res.status, 400);
+  assert.match(res.data.error, /₹/);
+  assert.deepEqual(await fs.readFile(path.join(siteRoot, 'old.txt')), Buffer.from('café crème\n', 'latin1'));
+});
+
+test('Windows line endings and a byte-order mark survive a save', async () => {
+  await fs.writeFile(path.join(siteRoot, 'win.txt'), '﻿one\r\ntwo\r\n');
+
+  const opened = await admin(`/domains/${ctx.domainId}/files/content?path=/win.txt`);
+  assert.equal(opened.data.eol, 'crlf');
+  assert.equal(opened.data.encoding, 'utf8');
+
+  // What a textarea hands back: LF only.
+  const content = opened.data.content.replace(/\r\n/g, '\n').replace('two', 'two\nthree');
+  const saved = await admin(`/domains/${ctx.domainId}/files/content`, {
+    method: 'PUT',
+    body: { path: '/win.txt', content, eol: 'crlf' },
+  });
+  assert.equal(saved.status, 200);
+  assert.equal(await fs.readFile(path.join(siteRoot, 'win.txt'), 'utf8'), '﻿one\r\ntwo\r\nthree\r\n');
+});
+
+test('a new file can be created, but never over one that is there', async () => {
+  const made = await admin(`/domains/${ctx.domainId}/files/file`, {
+    method: 'POST',
+    body: { path: '/', name: 'notes.md' },
+  });
+  assert.equal(made.status, 201);
+  assert.equal(made.data.path, '/notes.md');
+  assert.equal(await fs.readFile(path.join(siteRoot, 'notes.md'), 'utf8'), '');
+
+  const again = await admin(`/domains/${ctx.domainId}/files/file`, {
+    method: 'POST',
+    body: { path: '/', name: 'index.html' },
+  });
+  assert.equal(again.status, 409);
+  assert.ok((await fs.readFile(path.join(siteRoot, 'index.html'), 'utf8')).length > 0, 'the existing file is untouched');
+
+  const sneaky = await admin(`/domains/${ctx.domainId}/files/file`, {
+    method: 'POST',
+    body: { path: '/', name: '../outside.txt' },
+  });
+  assert.equal(sneaky.status, 400);
+  assert.equal(await exists(path.join(sandbox, 'outside.txt')), false);
+});
+
+// --- Several at once --------------------------------------------------------
+
+test('several items can be deleted at once, and one that fails is named', async () => {
+  await fs.mkdir(path.join(siteRoot, 'old', 'deep'), { recursive: true });
+  await fs.writeFile(path.join(siteRoot, 'old', 'deep', 'x.txt'), 'x');
+  await fs.writeFile(path.join(siteRoot, 'a.txt'), 'a');
+
+  const res = await admin(`/domains/${ctx.domainId}/files/delete-many`, {
+    method: 'POST',
+    body: {
+      path: '/',
+      items: [
+        { name: 'a.txt', type: 'file' },
+        { name: 'old', type: 'directory' },
+        { name: 'not-there.txt', type: 'file' },
+      ],
+    },
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.data.deleted, 2);
+  assert.equal(res.data.ok, false);
+  assert.deepEqual(res.data.failed.map((f) => f.name), ['not-there.txt']);
+  assert.equal(await exists(path.join(siteRoot, 'a.txt')), false);
+  assert.equal(await exists(path.join(siteRoot, 'old')), false);
+});
+
+test('a name in a bulk delete cannot reach outside the folder', async () => {
+  const res = await admin(`/domains/${ctx.domainId}/files/delete-many`, {
+    method: 'POST',
+    body: { path: '/', items: [{ name: '../private', type: 'directory' }] },
+  });
+  assert.equal(res.status, 400);
+  assert.equal(await exists(path.join(sandbox, 'private', 'secrets.txt')), true);
+});
+
+async function downloadZip(body) {
+  const res = await fetch(`${BASE}/api/domains/${ctx.domainId}/files/zip-download`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: await adminCookie() },
+    body: JSON.stringify(body),
+  });
+  return res;
+}
+
+test('a selection downloads as a zip of exactly what was picked', async () => {
+  const res = await downloadZip({ path: '/', names: ['css', 'index.html'] });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'application/zip');
+  assert.ok(
+    res.headers.get('content-disposition').includes(`${DOMAIN}.zip`),
+    'a zip of the top level is named after the site',
+  );
+
+  const zip = await readZip(Buffer.from(await res.arrayBuffer()), { defaultExclusions: false });
+  const paths = zip.files.map((f) => f.path).sort();
+  assert.deepEqual(paths, ['css/main.css', 'index.html']);
+  assert.equal(
+    zip.files.find((f) => f.path === 'index.html').contents.toString(),
+    await fs.readFile(path.join(siteRoot, 'index.html'), 'utf8'),
+  );
+});
+
+test('a zip download cannot be pointed outside the root', async () => {
+  const smuggled = await downloadZip({ path: '/', names: ['../private'] });
+  assert.equal(smuggled.status, 400);
+
+  // The folder is clamped to the root, so this asks for the decoy inside it
+  // and never the real private folder beside it.
+  const climbed = await downloadZip({ path: '/../..', names: ['private'] });
+  assert.equal(climbed.status, 200);
+  const zip = await readZip(Buffer.from(await climbed.arrayBuffer()), { defaultExclusions: false });
+  const text = zip.files.map((f) => f.contents.toString()).join('\n');
+  assert.ok(!text.includes('TOP-SECRET-VALUE'), 'the file outside the root must never be zipped');
+  assert.match(text, /decoy-inside-root/);
+});
+
+test('a zip is made in the folder, and a name that is taken gets a number', async () => {
+  const first = await admin(`/domains/${ctx.domainId}/files/compress`, {
+    method: 'POST',
+    body: { path: '/', names: ['css'] },
+  });
+  assert.equal(first.status, 201);
+  assert.equal(first.data.name, 'css.zip');
+
+  const zip = await readZip(await fs.readFile(path.join(siteRoot, 'css.zip')), { defaultExclusions: false });
+  assert.deepEqual(zip.files.map((f) => f.path), ['css/main.css']);
+
+  const second = await admin(`/domains/${ctx.domainId}/files/compress`, {
+    method: 'POST',
+    body: { path: '/', names: ['css'] },
+  });
+  assert.equal(second.data.name, 'css-2.zip', 'the first zip is not replaced');
+  assert.equal(await exists(path.join(siteRoot, 'css.zip')), true);
+});
+
+// --- Extracting -------------------------------------------------------------
+
+test('a zip extracts into a folder of its own, empty folders included', async () => {
+  await fs.writeFile(
+    path.join(siteRoot, 'bundle.zip'),
+    await buildZip([
+      { path: 'site/a.txt', contents: Buffer.from('A') },
+      { path: 'site/.htaccess', contents: Buffer.from('Options -Indexes') },
+      { path: 'empty', directory: true },
+    ]),
+  );
+
+  const res = await admin(`/domains/${ctx.domainId}/files/extract`, {
+    method: 'POST',
+    body: { path: '/bundle.zip' },
+  });
+  assert.equal(res.status, 200, res.data?.error);
+  assert.equal(res.data.ok, true);
+  assert.equal(res.data.target, '/bundle');
+  assert.equal(await fs.readFile(path.join(siteRoot, 'bundle', 'site', 'a.txt'), 'utf8'), 'A');
+  assert.equal(
+    await fs.readFile(path.join(siteRoot, 'bundle', 'site', '.htaccess'), 'utf8'),
+    'Options -Indexes',
+    'a dotfile is unpacked like anything else; the deploy exclusions do not apply here',
+  );
+  assert.ok((await fs.stat(path.join(siteRoot, 'bundle', 'empty'))).isDirectory());
+});
+
+test('extracting beside the zip keeps existing files unless told to replace them', async () => {
+  const before = await fs.readFile(path.join(siteRoot, 'index.html'), 'utf8');
+  await fs.writeFile(
+    path.join(siteRoot, 'update.zip'),
+    await buildZip([
+      { path: 'index.html', contents: Buffer.from('<h1>from the zip</h1>') },
+      { path: 'fresh.txt', contents: Buffer.from('new') },
+    ]),
+  );
+
+  const kept = await admin(`/domains/${ctx.domainId}/files/extract`, {
+    method: 'POST',
+    body: { path: '/update.zip', into: 'here' },
+  });
+  assert.equal(kept.status, 200);
+  assert.equal(kept.data.written, 1);
+  assert.deepEqual(kept.data.skipped, ['index.html']);
+  assert.equal(await fs.readFile(path.join(siteRoot, 'index.html'), 'utf8'), before);
+  assert.equal(await fs.readFile(path.join(siteRoot, 'fresh.txt'), 'utf8'), 'new');
+
+  const replaced = await admin(`/domains/${ctx.domainId}/files/extract`, {
+    method: 'POST',
+    body: { path: '/update.zip', into: 'here', overwrite: true },
+  });
+  assert.equal(replaced.data.written, 2);
+  assert.equal(await fs.readFile(path.join(siteRoot, 'index.html'), 'utf8'), '<h1>from the zip</h1>');
+});
+
+test('a zip that tries to write outside its folder is refused before anything is written', async () => {
+  await fs.writeFile(
+    path.join(siteRoot, 'evil.zip'),
+    await buildZip([
+      { path: 'harmless.txt', contents: Buffer.from('ok') },
+      { path: '../../escape.txt', contents: Buffer.from('escaped') },
+    ]),
+  );
+
+  const res = await admin(`/domains/${ctx.domainId}/files/extract`, {
+    method: 'POST',
+    body: { path: '/evil.zip', into: 'here' },
+  });
+  assert.equal(res.status, 400);
+  assert.match(res.data.error, /outside/i);
+  assert.equal(await exists(path.join(sandbox, 'escape.txt')), false);
+  assert.equal(await exists(path.join(path.dirname(sandbox), 'escape.txt')), false);
+  assert.equal(await exists(path.join(siteRoot, 'harmless.txt')), false, 'nothing from a refused zip is written');
+});
+
+test('only a zip can be extracted', async () => {
+  const res = await admin(`/domains/${ctx.domainId}/files/extract`, {
+    method: 'POST',
+    body: { path: '/index.html' },
+  });
+  assert.equal(res.status, 400);
+});
+
+test('none of the new file actions reach a domain the user is not assigned', async () => {
+  const other = ctx.otherId;
+  for (const [label, call] of [
+    ['new file', member(`/domains/${other}/files/file`, { method: 'POST', body: { path: '/', name: 'x' } })],
+    ['bulk delete', member(`/domains/${other}/files/delete-many`, { method: 'POST', body: { path: '/', items: [{ name: 'x', type: 'file' }] } })],
+    ['zip download', member(`/domains/${other}/files/zip-download`, { method: 'POST', body: { path: '/', names: ['x'] } })],
+    ['compress', member(`/domains/${other}/files/compress`, { method: 'POST', body: { path: '/', names: ['x'] } })],
+    ['extract', member(`/domains/${other}/files/extract`, { method: 'POST', body: { path: '/x.zip' } })],
+  ]) {
+    assert.equal((await call).status, 404, `${label} must not reach an unassigned domain`);
+  }
+});
+
+test('an assigned user can zip and extract on their own domain', async () => {
+  const res = await member(`/domains/${ctx.domainId}/files/compress`, {
+    method: 'POST',
+    body: { path: '/', names: ['fresh.txt'], name: 'mine' },
+  });
+  assert.equal(res.status, 201);
+  assert.equal(res.data.name, 'mine.zip');
+});
+
+// --- Settings are not overwritten by a stale form ---------------------------
+
+test('a settings form drawn before the last save cannot overwrite it', async () => {
+  // The page loads, and the form is drawn from what it was given.
+  const loaded = (await admin(`/domains/${ctx.otherId}`)).data.settings?.updatedAt ?? null;
+
+  const first = await admin(`/domains/${ctx.otherId}/settings`, {
+    method: 'PUT',
+    body: { ftpHost: 'ftp.example.net', ftpUsername: 'someone', expectedUpdatedAt: loaded },
+  });
+  assert.equal(first.status, 200, first.data?.error);
+  const version = first.data.settings.updatedAt;
+  assert.ok(version && version !== loaded);
+
+  // The same page, the tab opened again from its original copy: blank
+  // fields, still claiming the version from before the save. This is what
+  // wiped details.
+  const stale = await admin(`/domains/${ctx.otherId}/settings`, {
+    method: 'PUT',
+    body: { ftpHost: '', ftpUsername: '', expectedUpdatedAt: loaded },
+  });
+  assert.equal(stale.status, 409);
+  assert.match(stale.data.error, /changed after this form was opened/);
+
+  const row = await prisma.domainSettings.findUnique({ where: { domainId: ctx.otherId } });
+  assert.equal(row.ftpHost, 'ftp.example.net', 'the saved host survives');
+  assert.equal(row.ftpUsername, 'someone');
+
+  // A form drawn from the current version saves normally, and the log says
+  // what was emptied.
+  const fresh = await admin(`/domains/${ctx.otherId}/settings`, {
+    method: 'PUT',
+    body: { ftpHost: 'ftp.example.org', ftpUsername: '', expectedUpdatedAt: version },
+  });
+  assert.equal(fresh.status, 200);
+  const logged = await prisma.activityLog.findFirst({
+    where: { domainId: ctx.otherId, event: 'settings.domain.updated' },
+    orderBy: { createdAt: 'desc' },
+  });
+  assert.match(logged.detail, /Fields changed: ftpHost/);
+  assert.match(logged.detail, /Fields emptied: ftpUsername/);
 });

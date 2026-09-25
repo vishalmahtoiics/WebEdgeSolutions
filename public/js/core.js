@@ -480,9 +480,14 @@ export function toast(message, tone = '') {
 // --- Modal -----------------------------------------------------------------
 
 /// Opens a modal. `render(close)` returns the body; `footer(close)` the buttons.
-export function openModal({ title, render, footer, wide = false }) {
+///
+/// `beforeClose` is asked before the × button, Escape or a click outside
+/// closes the dialog, and returning false keeps it open — for a dialog with
+/// unsaved work in it. `close(true)` from the caller skips the question.
+export function openModal({ title, render, footer, wide = false, beforeClose = null }) {
   const root = document.getElementById('modal-root');
-  const close = () => {
+  const close = (force) => {
+    if (force !== true && beforeClose && beforeClose() === false) return;
     clear(root);
     document.removeEventListener('keydown', onKey);
   };

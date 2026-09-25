@@ -411,6 +411,159 @@
 .file-name { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .file-name .ico { color: var(--muted); flex: none; }
 
+/* --- File manager ----------------------------------------------------------------------
+
+   One card: where you are, what you can do here, what is ticked, then the list.
+   The row actions stay quiet (ghost buttons) so the names read first, and the
+   one thing most people came to do — edit — is the only solid button on a row.
+------------------------------------------------------------------------------------- */
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+.files-card { position: relative; }
+
+.files-head {
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
+}
+.files-title { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.files-title h2 { font-size: 16.5px; margin: 0; }
+
+/* The path, as a row of stops you can click back to. */
+.files-crumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; font-size: 13.5px; }
+.files-crumb {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 8px; border-radius: var(--r-xs);
+  color: var(--muted); background: none; border: 0; font: inherit; cursor: pointer;
+  max-width: 28ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+button.files-crumb:hover { background: var(--surface-3); color: var(--ink); }
+.files-crumb.current { color: var(--ink); font-weight: 600; cursor: default; }
+.files-crumb-sep { color: var(--muted); opacity: .55; padding: 0 1px; }
+
+.files-toolbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.files-toolbar .table-search {
+  width: auto; flex: 1 1 180px; max-width: 300px;
+  min-height: 32px; padding: 5px 11px; font-size: 13.5px; border-radius: var(--r-xs);
+}
+
+.files-progress {
+  display: flex; align-items: center; gap: 6px;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+.files-progress[hidden] { display: none; }
+
+.files-pad { padding: 16px 20px; }
+.files-body .empty { padding: 36px 20px; }
+
+.files-table tbody td { padding-top: 9px; padding-bottom: 9px; }
+.files-table th.pick, .files-table td.pick { width: 1%; padding-right: 4px; }
+.files-table td.pick { cursor: pointer; }
+.files-table td.pick input, .files-table th.pick input { display: block; }
+.files-table tbody tr.is-picked,
+.files-table tbody tr.is-picked:hover { background: var(--brand-soft); }
+.files-table th.pick input:indeterminate { background: var(--brand-soft); border-color: var(--brand); }
+
+.files-table .file-name {
+  background: none; border: 0; padding: 2px 0; font: inherit; color: var(--ink);
+  cursor: pointer; text-align: left;
+}
+.files-table .file-name:hover .break { color: var(--brand); text-decoration: underline; text-underline-offset: 3px; }
+.files-table .file-name.is-dir .break { font-weight: 560; }
+
+.files-ico {
+  display: inline-grid; place-items: center; flex: none;
+  width: 30px; height: 30px; border-radius: 8px;
+  background: var(--surface-3); color: var(--muted);
+}
+.files-ico.dir { background: color-mix(in srgb, #f5b73b 18%, transparent); color: #c98a0c; }
+.files-ico.zip { background: var(--brand-soft); color: var(--brand); }
+.files-up {
+  display: inline-grid; place-items: center; width: 30px; height: 30px;
+  border-radius: 8px; background: var(--surface-3); color: var(--muted); font-weight: 700;
+}
+
+.files-actions-cell { width: 1%; white-space: nowrap; text-align: right; }
+.files-actions { display: inline-flex; gap: 4px; justify-content: flex-end; }
+.files-actions .btn.sm { padding: 4px 9px; min-height: 28px; }
+.btn.ghost.danger-text { color: var(--danger); }
+
+.files-meta { margin-top: 2px; padding-left: 39px; }
+.show-sm { display: none; }
+
+/* Drop anywhere on the card. */
+.files-drop {
+  position: absolute; inset: 0; z-index: 5;
+  display: none; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  border: 2px dashed var(--brand); border-radius: inherit;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--brand); font-weight: 600;
+  pointer-events: none;
+}
+.files-card.is-dropping .files-drop { display: flex; }
+
+/* Extract: two choices, each a whole clickable card. */
+.files-choices { display: grid; gap: 8px; }
+.files-choice {
+  display: flex; gap: 11px; align-items: flex-start;
+  padding: 12px 14px;
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.files-choice:has(input:checked) { border-color: var(--brand); background: var(--brand-soft); }
+.files-choice > span { display: grid; gap: 3px; }
+.files-choice input { margin-top: 2px; }
+
+/* The editor. As tall as the window allows, because a config file read
+   through a letterbox is a config file somebody gets wrong. */
+.files-editor-wrap { display: grid; gap: 8px; }
+.files-editor-bar { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.files-editor {
+  height: min(62vh, 640px);
+  min-height: 260px;
+  white-space: pre;
+  overflow: auto;
+  resize: vertical;
+  tab-size: 4;
+}
+.files-dirty { color: var(--warn); font-weight: 600; }
+
+@media (max-width: 640px) {
+  .files-head { padding: 14px 16px 10px; }
+  .show-sm { display: block; }
+  .files-toolbar .table-search { max-width: none; flex-basis: 100%; }
+  .files-toolbar .grow { display: none; }
+  .files-editor { height: 55vh; }
+
+  /* Each row becomes two lines: the name, then its buttons in a row
+     beneath it — rather than a column of buttons that makes every row
+     four buttons tall. */
+  .files-table thead tr,
+  .files-table tbody tr { display: grid; grid-template-columns: 38px minmax(0, 1fr); }
+  .files-table thead th:last-child { display: none; }
+  .files-table tbody tr { border-bottom: 1px solid var(--border); }
+  .files-table tbody tr:last-child { border-bottom: 0; }
+  .files-table tbody td { border-bottom: 0; }
+  .files-table th.pick, .files-table td.pick { width: auto; padding-left: 14px; }
+  .files-table .files-actions-cell {
+    grid-column: 2; width: auto; padding-top: 0; white-space: normal; text-align: left;
+  }
+  .files-actions { flex-wrap: wrap; justify-content: flex-start; gap: 2px; margin-left: 30px; }
+  .files-actions .btn.sm { padding: 4px 8px; }
+}
+
 /* The SQL box. Monospace, dark in both themes, because a query editor that
    changes colour with the page is a query editor people misread. */
 .code-editor {

@@ -60,6 +60,8 @@ const MANIFEST_LIMIT = 5000;
 /// Files out of an uploaded zip.
 export async function filesFromZip(buffer, { exclude = [], stripRoot = true } = {}) {
   const read = await readZip(buffer, { exclude });
+  // Folders alone are nothing to deploy.
+  if (!read.files.length) throw new ArchiveError('That archive has no files in it.');
   const { files, stripped } = stripRoot ? stripCommonRoot(read.files) : { files: read.files, stripped: null };
   return { files, skipped: read.skipped, stripped, bytes: read.totalBytes };
 }

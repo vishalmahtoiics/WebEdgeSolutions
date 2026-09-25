@@ -1115,7 +1115,23 @@ function settingsPanel(data) {
       ]),
     );
     body.dbAllowWrites = dbAllowWrites.checked;
-    await api(`/domains/${d.id}/settings`, { method: 'PUT', body });
+    // Which version this form was drawn from, so the server can refuse to
+    // write a stale form's blanks over details saved since.
+    body.expectedUpdatedAt = data.settings?.updatedAt ?? null;
+    const res = await api(`/domains/${d.id}/settings`, { method: 'PUT', body });
+
+    // Kept on the page's copy, which is what this tab is drawn from the next
+    // time it is opened. Without this, coming back to the tab showed the
+    // values from before the save — empty, the first time — and saving that
+    // wiped the details that had just been entered.
+    data.settings = res.settings;
+    for (const [key, placeholder] of [
+      ['ftpPassword', res.settings?.hasFtpPassword ? `Saved (${res.settings.ftpPasswordHint}) — leave blank to keep it` : ''],
+      ['dbPassword', res.settings?.hasDbPassword ? `Saved (${res.settings.dbPasswordHint}) — leave blank to keep it` : ''],
+    ]) {
+      inputs[key].value = '';
+      inputs[key].placeholder = placeholder;
+    }
     toast('Settings saved.', 'ok');
     alertHost.append(el('div', { class: 'alert ok' }, 'Saved.'));
     save.disabled = false;

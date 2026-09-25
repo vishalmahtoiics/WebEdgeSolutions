@@ -47,6 +47,12 @@ app.use(
   }),
 );
 
+// The file editor saves a whole file in one request, and it opens files up to
+// 512 KB — twice what every other request here is allowed. With one limit for
+// everything, a file between the two opened fine and then failed to save with
+// "request entity too large". Parsed here first; the general parser below
+// then sees the body is done and leaves it alone.
+app.use(/^\/api\/domains\/[^/]+\/files\/content$/, express.json({ limit: '4mb' }));
 app.use(express.json({ limit: '256kb' }));
 
 const PgStore = connectPgSimple(session);

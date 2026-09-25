@@ -72,7 +72,13 @@ const ALWAYS_EXCLUDE = [
 /// Matched per segment rather than by prefix, so "src/.env" and "a/b/.git/c"
 /// are caught as surely as ".env" at the root.
 export function isExcluded(relativePath, extra = []) {
-  const blocked = new Set([...ALWAYS_EXCLUDE, ...extra].map((e) => e.toLowerCase()));
+  return matchesSegment(relativePath, [...ALWAYS_EXCLUDE, ...extra]);
+}
+
+/// Whether any segment of a path is one of `names`, ignoring case.
+function matchesSegment(relativePath, names) {
+  if (!names.length) return false;
+  const blocked = new Set(names.map((e) => e.toLowerCase()));
   return relativePath
     .split('/')
     .some((segment) => blocked.has(segment.toLowerCase()));
@@ -130,7 +136,18 @@ const isSymlink = (entry) => ((entry.externalFileAttributes >>> 16) & 0xf000) ==
 /// Everything is held in memory, which is the right trade at these sizes: the
 /// alternative is writing attacker-named files to disk before they have been
 /// checked, and the checking is the entire point.
-export function readZip(buffer, { exclude = [] } = {}) {
+///
+/// `defaultExclusions: false` drops the deploy list (.git, node_modules and
+/// the rest) for the file manager, where unpacking a zip is the same act as
+/// uploading what is in it and nothing should quietly go missing. The three
+/// guards above are not options; they apply whatever is passed.
+///
+/// Folder entries are reported in `directories`, so an empty folder in the
+/// archive can be made rather than lost.
+export function readZip(buffer, { exclude = [], defaultExclusions = true } = {}) {
+  const excluded = (relative) =>
+    defaultExclusions ? isExcluded(relative, exclude) : matchesSegment(relative, exclude);
+
   return new Promise((resolve, reject) => {
     yauzl.fromBuffer(buffer, { lazyEntries: true, decodeStrings: true }, (openErr, zip) => {
       if (openErr || !zip) {
@@ -138,6 +155,7 @@ export function readZip(buffer, { exclude = [] } = {}) {
       }
 
       const files = [];
+      const directories = [];
       const skipped = [];
       let totalBytes = 0;
       let seen = 0;
@@ -159,10 +177,10 @@ export function readZip(buffer, { exclude = [] } = {}) {
       const done = () => {
         if (settled) return;
         settled = true;
-        if (!files.length) {
+        if (!files.length && !directories.length) {
           return reject(new ArchiveError('That archive has no files in it.'));
         }
-        resolve({ files, skipped, totalBytes });
+        resolve({ files, directories, skipped, totalBytes });
       };
 
       // yauzl does its own path validation and rejects an escaping entry
@@ -202,13 +220,19 @@ export function readZip(buffer, { exclude = [] } = {}) {
         let relative;
         try {
           relative = safeEntryPath(entry.fileName);
+          // A folder entry. Checked by the same rules as a file, by its
+          // name without the slash, and kept so an empty folder survives.
+          if (relative === null && /\/$/.test(String(entry.fileName || '').replace(/\\/g, '/'))) {
+            const folder = safeEntryPath(String(entry.fileName).replace(/\\/g, '/').replace(/\/+$/, ''));
+            if (folder && !excluded(folder)) directories.push(folder);
+          }
         } catch (err) {
           return fail(err);
         }
 
         if (relative === null) return zip.readEntry();
 
-        if (isExcluded(relative, exclude)) {
+        if (excluded(relative)) {
           skipped.push(relative);
           return zip.readEntry();
         }

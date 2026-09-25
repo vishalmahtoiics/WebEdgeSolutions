@@ -414,6 +414,9 @@ const settingsSchema = z.object({
   nameservers: z.string().trim().max(500).optional(),
   phpVersion: z.string().trim().max(20).optional(),
   notes: z.string().max(2000).optional(),
+  // When the form was drawn from, so a stale form cannot overwrite newer
+  // values. null means the form was drawn when nothing was saved yet.
+  expectedUpdatedAt: z.string().max(40).nullish(),
 });
 
 /// Domain settings for the browser. The FTP password is a live credential for
@@ -577,7 +580,28 @@ domainsRouter.put(
   requireAdmin,
   validate(settingsSchema),
   asyncHandler(async (req, res) => {
-    const data = blankToNull(req.body);
+    const { expectedUpdatedAt, ...fields } = req.body;
+    const data = blankToNull(fields);
+
+    const existing = await prisma.domainSettings.findUnique({ where: { domainId: req.domain.id } });
+
+    // A form drawn before the last save still holds the values from before
+    // it, blanks included, and saving it would write those blanks over the
+    // real details. That is how FTP details "disappeared": saved, then the
+    // tab was revisited, drawn from the page's original (empty) copy, and
+    // saved again. Refused rather than merged, because which of two forms is
+    // right is not something to guess. Absent entirely means a browser still
+    // running the old script, which is let through as before.
+    if (expectedUpdatedAt !== undefined) {
+      const current = existing?.updatedAt?.toISOString() ?? null;
+      if (current !== (expectedUpdatedAt || null)) {
+        throw new HttpError(
+          409,
+          'These settings were changed after this form was opened, so saving it would overwrite them. ' +
+            'Reload the page to see the current values, then make your change again.',
+        );
+      }
+    }
 
     // An empty password field means "leave it alone", so an administrator can
     // edit the host or username without retyping the secret.
@@ -598,13 +622,30 @@ domainsRouter.put(
 
     // Named rather than dumped: the values include hosts and usernames, and an
     // alert that repeats them is an alert that leaks them into an inbox.
-    const changed = Object.keys(req.body).filter((k) => req.body[k] !== undefined && req.body[k] !== '');
+    // Compared with what was there, so the log says what actually moved — and
+    // says separately what was emptied, which is the one to look for when
+    // details go missing.
+    const changed = [];
+    const cleared = [];
+    for (const key of Object.keys(data)) {
+      const before = existing?.[key] ?? null;
+      const after = settings[key] ?? null;
+      if (key === 'ftpPassword' || key === 'dbPassword') {
+        changed.push(key);
+      } else if (String(before) !== String(after)) {
+        (after === null ? cleared : changed).push(key);
+      }
+    }
+    const detail = [
+      changed.length ? `Fields changed: ${changed.join(', ')}` : null,
+      cleared.length ? `Fields emptied: ${cleared.join(', ')}` : null,
+    ].filter(Boolean).join('\n');
     await record({
       event: 'settings.domain.updated',
       actor: req.user,
       domain: req.domain,
       summary: `Changed the connection settings for ${req.domain.name}`,
-      detail: changed.length ? `Fields changed: ${changed.join(', ')}` : null,
+      detail: detail || 'Saved with no changes.',
     });
 
     res.json({ settings: presentSettings(settings, isAdmin(req.user)) });
