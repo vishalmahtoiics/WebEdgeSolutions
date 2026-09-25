@@ -39,7 +39,10 @@ export function resolvePath(root, requested = '/') {
   if (base === '/') return joined;
 
   if (joined !== base && !joined.startsWith(`${base}/`)) {
-    throw new StorageError('That path is outside the allowed directory.', 403);
+    // Worded differently from the old "outside the allowed directory" on
+    // purpose: that message came from the bug fixed alongside this, so
+    // seeing the old wording means the server is still running old code.
+    throw new StorageError("That path is outside this site's folder.", 403);
   }
   return joined;
 }

@@ -111,9 +111,9 @@ export async function renderSystem() {
 
   const draw = async () => {
     try {
-      const { stats } = await api('/system');
+      const { stats, portal } = await api('/system');
       if (stopped) return;
-      fill(body, ...panels(stats));
+      fill(body, ...panels(stats, portal));
       stamp.textContent = `updated ${new Date(stats.at).toLocaleTimeString()}`;
     } catch (err) {
       if (stopped) return;
@@ -142,11 +142,11 @@ export async function renderSystem() {
   return frag;
 }
 
-function panels(s) {
-  return [hostCard(s), loadCard(s), diskCard(s), networkCard(s)];
+function panels(s, portal) {
+  return [hostCard(s, portal), loadCard(s), diskCard(s), networkCard(s)];
 }
 
-function hostCard(s) {
+function hostCard(s, portal) {
   const h = s.host;
   const env = h.environment;
 
@@ -183,6 +183,16 @@ function hostCard(s) {
         { class: 'stat-row' },
         statTile('Uptime', duration(s.uptime.systemSeconds), 'since the machine last started'),
         statTile('Portal running', duration(s.uptime.processSeconds), 'since this process started'),
+        // Which code is live. After pushing a fix, this is where to check it
+        // actually reached the server: a commit that does not match, or a
+        // start time from before the push, means it is still the old code.
+        statTile(
+          'Portal version',
+          portal?.commit || 'Unknown',
+          portal?.commit
+            ? `started ${new Date(portal.startedAt).toLocaleString()}`
+            : 'this server does not report its commit',
+        ),
         statTile('Processors', h.cores ? `${h.cores} cores` : '—', h.arch || ''),
         statTile('System', h.platform || '—', h.release || ''),
       ),

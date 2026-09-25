@@ -10,6 +10,7 @@ import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { asyncHandler } from '../lib/errors.js';
 import { readSystemStats } from '../lib/systemStats.js';
 import { getAppSettings } from '../services/notifier.js';
+import { portalVersion } from '../lib/version.js';
 
 export const systemRouter = Router();
 
@@ -21,6 +22,6 @@ systemRouter.get(
     // Where to look for temperatures when this machine has no sensors of its
     // own, which under WSL and in a container is always.
     const { sensorUrl } = await getAppSettings();
-    res.json({ stats: await readSystemStats({ sensorUrl }) });
+    res.json({ stats: await readSystemStats({ sensorUrl }), portal: portalVersion() });
   }),
 );
