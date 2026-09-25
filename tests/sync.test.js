@@ -27,13 +27,15 @@ let zone = [
 
 // Mutable so a test can simulate the provider's data changing between syncs.
 let portfolio = [
-  { id: 201, domain: D1, type: 'domain', status: 'active', createdAt: '2024-02-01T10:00:00Z', expiresAt: '2027-02-01T10:00:00Z' },
+  // D1 in the documented snake case; D2 in the camel case the adapter used
+  // to expect, which must still be read.
+  { id: 201, domain: D1, type: 'domain', status: 'active', created_at: '2024-02-01T10:00:00Z', expires_at: '2027-02-01T10:00:00Z' },
   { id: 202, domain: D2, type: 'domain', status: 'active', createdAt: '2024-03-01T10:00:00Z', expiresAt: '2027-03-01T10:00:00Z' },
 ];
 
 // Mutable so a test can give this domain more mailboxes than fit on one page.
 let mailboxes = [
-  { id: 'mb_a', address: `info@${D1}`, status: 'active', usage: { storageQuota: 5242880, storageUsed: 0 } },
+  { id: 'mb_a', address: `info@${D1}`, status: 'active', created_at: '2025-03-01T10:00:00Z', usage: { storage_quota: 5242880, storage_used: 0 } },
   { id: 'mb_b', address: `admin@${D1}`, status: 'active', usage: { storageQuota: 5242880, storageUsed: 0 } },
 ];
 
@@ -290,6 +292,28 @@ test('mailboxes are imported from the provider', async () => {
   const addresses = data.emailAccounts.map((m) => m.address).sort();
   assert.deepEqual(addresses, [`admin@${D1}`, `info@${D1}`]);
   assert.equal(data.emailAccounts[0].quotaMb, 5120);
+});
+
+test("a mailbox's added date is the hosting account's own, where it gives one", async () => {
+  const { data } = await call(`/domains/${ctx.domainId}`);
+  const info = data.emailAccounts.find((m) => m.address === `info@${D1}`);
+  assert.equal(new Date(info.addedAt).toISOString(), '2025-03-01T10:00:00.000Z');
+  assert.equal(info.addedSource, 'server');
+  assert.equal(info.quotaMb, 5120, 'the size is read from storage_quota');
+
+  // No created_at from the provider: the portal's own date, and it says so.
+  const admin = data.emailAccounts.find((m) => m.address === `admin@${D1}`);
+  assert.equal(admin.addedSource, 'portal');
+  assert.ok(admin.addedAt);
+});
+
+test("a domain's added date comes from the provider, in either spelling", async () => {
+  const { data } = await call('/domains');
+  const d1 = data.domains.find((d) => d.name === D1);
+  const d2 = data.domains.find((d) => d.name === D2);
+  assert.equal(new Date(d1.registeredAt).toISOString(), '2024-02-01T10:00:00.000Z', 'from created_at');
+  assert.equal(new Date(d1.expiresAt).toISOString(), '2027-02-01T10:00:00.000Z', 'from expires_at');
+  assert.equal(new Date(d2.registeredAt).toISOString(), '2024-03-01T10:00:00.000Z', 'from createdAt');
 });
 
 test('re-syncing mailboxes does not duplicate them', async () => {

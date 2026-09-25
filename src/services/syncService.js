@@ -132,6 +132,7 @@ export async function syncEmailAccounts(domain) {
         externalId: m.externalId ?? null,
         providerQuotaMb: m.quotaMb ?? null,
         providerUsedMb: m.usedMb ?? null,
+        providerCreatedAt: m.createdAt ?? null,
         isFromProvider: true,
       },
       // Overrides and notes are deliberately absent: an administrator's
@@ -141,6 +142,7 @@ export async function syncEmailAccounts(domain) {
         externalId: m.externalId ?? null,
         providerQuotaMb: m.quotaMb ?? null,
         providerUsedMb: m.usedMb ?? null,
+        providerCreatedAt: m.createdAt ?? null,
         isFromProvider: true,
       },
     });

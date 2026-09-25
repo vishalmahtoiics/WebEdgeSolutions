@@ -59,6 +59,8 @@ export function presentDomainSummary(domain, isAdmin) {
     name: domain.name,
     status: domain.status,
     type: domain.type,
+    // When it was added to the hosting account, as the provider reports it.
+    registeredAt: domain.registeredAt,
     expiresAt: domain.expiresAt,
     lastSyncedAt: domain.lastSyncedAt,
     emailCount: domain._count?.emailAccounts ?? 0,
@@ -149,6 +151,12 @@ export function presentEmailAccount(email, isAdmin) {
     usedMb,
     notes: email.notes,
     isManaged: Boolean(email.externalId),
+    // When the mailbox was made: the hosting account's own date where it
+    // reports one, otherwise when it was first listed here. `addedSource`
+    // says which, so a date is never passed off as the provider's when it
+    // is only the portal's.
+    addedAt: email.providerCreatedAt ?? email.createdAt ?? null,
+    addedSource: email.providerCreatedAt ? 'server' : 'portal',
   };
 
   if (!isAdmin) return base;

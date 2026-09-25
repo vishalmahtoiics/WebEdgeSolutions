@@ -686,6 +686,14 @@ function emailPanel(data, isAdmin) {
       {},
       el('td', { class: 'strong break' }, m.address),
       el('td', {}, statusBadge(m.status)),
+      // The hosting account's own date where it has one. A mailbox only
+      // listed here shows when it was listed, marked as such.
+      el(
+        'td',
+        { class: 'small muted nowrap', title: m.addedSource === 'portal' ? 'When it was added to this portal' : 'When it was created' },
+        m.addedAt ? formatDate(m.addedAt) : '—',
+        m.addedAt && m.addedSource === 'portal' ? el('span', { class: 'tiny' }, ' (listed)') : null,
+      ),
       el(
         'td',
         { class: 'small nowrap' },
@@ -778,6 +786,7 @@ function emailPanel(data, isAdmin) {
                 {},
                 el('th', {}, 'Address'),
                 el('th', {}, 'Status'),
+                el('th', {}, 'Added'),
                 el('th', {}, 'Usage'),
                 isAdmin ? el('th', {}, 'Source') : null,
                 el('th', {}, ''),

@@ -1046,6 +1046,7 @@ domainsRouter.post(
         externalId: created.externalId ?? null,
         providerQuotaMb: created.quotaMb ?? null,
         providerUsedMb: created.usedMb ?? null,
+        providerCreatedAt: created.createdAt ?? null,
         isFromProvider: true,
       },
     });

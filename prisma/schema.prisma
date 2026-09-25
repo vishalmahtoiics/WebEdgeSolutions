@@ -214,6 +214,9 @@ model EmailAccount {
   /// administrator is choosing to display something else.
   providerQuotaMb Int?
   providerUsedMb  Int?
+  /// When the mailbox was made on the hosting account, as the provider
+  /// reports it. Null for a mailbox only typed into the portal.
+  providerCreatedAt DateTime?
 
   /// Administrator overrides. Null means "use the provider's value", which is
   /// why these are nullable rather than defaulted — absent is meaningful here.

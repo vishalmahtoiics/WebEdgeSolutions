@@ -163,6 +163,19 @@ async function requestAll(token, path, { maxPages = 200 } = {}) {
   return rows;
 }
 
+/// A field as the API sends it.
+///
+/// The API's JSON is snake case — created_at, is_available, storage_quota —
+/// as its published OpenAPI spec documents and as its own errors confirm
+/// ("the local part field is required"). This adapter was first written from
+/// Hostinger's PHP SDK docs, which rename every field to camel case, so it
+/// read createdAt, storageQuota and so on: names the API never sends. Dates,
+/// mailbox sizes and every flag came back empty on a real account.
+///
+/// The documented name is read first; the camel case one is kept as a
+/// fallback so nothing that ever did work stops working.
+const pick = (obj, snake, camel) => obj?.[snake] ?? obj?.[camel];
+
 function toDate(value) {
   if (!value) return null;
   const d = new Date(value);
@@ -193,19 +206,23 @@ async function findMailOrder(token, domainName) {
   return order;
 }
 
-/// Maps a mailbox resource. Hostinger reports usage as `storageUsed` and
-/// `storageQuota` in KILOBYTES, so both are converted to megabytes here.
+/// Maps a mailbox resource. Usage is reported in KILOBYTES
+/// (usage.storage_used and usage.storage_quota), so both are converted to
+/// megabytes here. `createdAt` is when the mailbox was made on the hosting
+/// account — the date a customer means by "added".
 function toMailbox(m) {
   const kbToMb = (kb) => (kb === null || kb === undefined ? null : Math.round(Number(kb) / 1024));
+  const usage = m.usage || {};
   return {
     address: m.address,
     status: m.status || 'unknown',
     externalId: m.id != null ? String(m.id) : null,
-    quotaMb: kbToMb(m.usage?.storageQuota),
-    usedMb: kbToMb(m.usage?.storageUsed),
-    messagesUsed: m.usage?.messagesUsed ?? null,
-    messagesQuota: m.usage?.messagesQuota ?? null,
-    isCatchall: m.isCatchall ?? null,
+    quotaMb: kbToMb(pick(usage, 'storage_quota', 'storageQuota')),
+    usedMb: kbToMb(pick(usage, 'storage_used', 'storageUsed')),
+    messagesUsed: pick(usage, 'messages_used', 'messagesUsed') ?? null,
+    messagesQuota: pick(usage, 'messages_quota', 'messagesQuota') ?? null,
+    isCatchall: pick(m, 'is_catchall', 'isCatchall') ?? null,
+    createdAt: toDate(pick(m, 'created_at', 'createdAt')),
   };
 }
 
@@ -263,8 +280,8 @@ export const hostingerAdapter = {
         externalId: item.id != null ? String(item.id) : null,
         status: item.status || 'unknown',
         type: item.type || null,
-        registeredAt: toDate(item.createdAt),
-        expiresAt: toDate(item.expiresAt),
+        registeredAt: toDate(pick(item, 'created_at', 'createdAt')),
+        expiresAt: toDate(pick(item, 'expires_at', 'expiresAt')),
       });
     }
 
@@ -281,9 +298,9 @@ export const hostingerAdapter = {
           byName.set(site.domain, {
             name: site.domain,
             externalId: null,
-            status: site.isEnabled === false ? 'suspended' : 'active',
+            status: pick(site, 'is_enabled', 'isEnabled') === false ? 'suspended' : 'active',
             type: 'hosting',
-            registeredAt: toDate(site.createdAt),
+            registeredAt: toDate(pick(site, 'created_at', 'createdAt')),
             expiresAt: null,
             website: site,
           });
@@ -301,18 +318,16 @@ export const hostingerAdapter = {
     const body = await request(token, `/api/domains/v1/portfolio/${encodeURIComponent(domainName)}`);
     if (!body || typeof body !== 'object') return null;
     const data = body.data && typeof body.data === 'object' ? body.data : body;
-    const ns = data.nameServers || {};
-    const nameservers = Object.keys(ns)
-      .sort()
-      .map((k) => ns[k])
-      .filter(Boolean);
+    // An object keyed ns1, ns2… or a plain list; either is read in order.
+    const ns = pick(data, 'name_servers', 'nameServers') || {};
+    const nameservers = (Array.isArray(ns) ? ns : Object.keys(ns).sort().map((k) => ns[k])).filter(Boolean);
     return {
       status: data.status || null,
-      isLocked: data.isLocked ?? null,
-      isPrivacyProtected: data.isPrivacyProtected ?? null,
+      isLocked: pick(data, 'is_locked', 'isLocked') ?? null,
+      isPrivacyProtected: pick(data, 'is_privacy_protected', 'isPrivacyProtected') ?? null,
       nameservers,
-      registeredAt: toDate(data.registeredAt || data.createdAt),
-      expiresAt: toDate(data.expiresAt),
+      registeredAt: toDate(pick(data, 'registered_at', 'registeredAt') || pick(data, 'created_at', 'createdAt')),
+      expiresAt: toDate(pick(data, 'expires_at', 'expiresAt')),
     };
   },
 
@@ -339,7 +354,7 @@ export const hostingerAdapter = {
           type: group.type ?? 'A',
           content: entry?.content ?? '',
           ttl: Number(group.ttl) || 3600,
-          isDisabled: Boolean(entry?.isDisabled),
+          isDisabled: Boolean(pick(entry, 'is_disabled', 'isDisabled')),
         });
       }
     }
@@ -429,30 +444,30 @@ export const hostingerAdapter = {
         id: f.id != null ? String(f.id) : null,
         mailbox: f.mailbox?.address || null,
         destination: f.destination || null,
-        keepCopy: f.isKeepCopyEnabled ?? null,
-        isActive: f.isActive ?? null,
-        isConfirmed: f.isConfirmed ?? null,
+        keepCopy: pick(f, 'is_keep_copy_enabled', 'isKeepCopyEnabled') ?? null,
+        isActive: pick(f, 'is_active', 'isActive') ?? null,
+        isConfirmed: pick(f, 'is_confirmed', 'isConfirmed') ?? null,
       })),
       aliases: aliases.map((a) => ({
         id: a.id != null ? String(a.id) : null,
         address: a.address || null,
         mailbox: a.mailbox?.address || null,
-        isActive: a.isActive ?? null,
+        isActive: pick(a, 'is_active', 'isActive') ?? null,
       })),
       autoreplies: autoreplies.map((r) => ({
         id: r.id != null ? String(r.id) : null,
         mailbox: r.mailbox?.address || null,
         subject: r.subject || null,
         body: r.body || null,
-        startsAt: toDate(r.startsAt),
-        endsAt: toDate(r.endsAt),
+        startsAt: toDate(pick(r, 'starts_at', 'startsAt')),
+        endsAt: toDate(pick(r, 'ends_at', 'endsAt')),
       })),
       catchalls: catchalls.map((c) => ({
         id: c.id != null ? String(c.id) : null,
         mailbox: c.mailbox?.address || null,
         domain: c.domain || null,
-        isActive: c.isActive ?? null,
-        isConfirmed: c.isConfirmed ?? null,
+        isActive: pick(c, 'is_active', 'isActive') ?? null,
+        isConfirmed: pick(c, 'is_confirmed', 'isConfirmed') ?? null,
       })),
     };
   },

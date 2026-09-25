@@ -11,30 +11,30 @@ const TOKEN = 'stub-token';
 // Response bodies mirroring the documented resource shapes.
 const FIXTURES = {
   '/api/domains/v1/portfolio': [
-    { id: 101, domain: 'example.com', type: 'domain', status: 'active', createdAt: '2024-02-01T10:00:00Z', expiresAt: '2027-02-01T10:00:00Z' },
-    { id: 102, domain: 'example.in', type: 'domain', status: 'expired', createdAt: '2023-05-10T10:00:00Z', expiresAt: '2025-05-10T10:00:00Z' },
+    { id: 101, domain: 'example.com', type: 'domain', status: 'active', created_at: '2024-02-01T10:00:00Z', expires_at: '2027-02-01T10:00:00Z' },
+    { id: 102, domain: 'example.in', type: 'domain', status: 'expired', created_at: '2023-05-10T10:00:00Z', expires_at: '2025-05-10T10:00:00Z' },
     // Unclaimed free domains have a null name and must be skipped.
-    { id: 103, domain: null, type: 'free_domain', status: 'requested', createdAt: '2024-06-01T10:00:00Z', expiresAt: null },
+    { id: 103, domain: null, type: 'free_domain', status: 'requested', created_at: '2024-06-01T10:00:00Z', expires_at: null },
   ],
   '/api/hosting/v1/websites': [
-    { domain: 'example.com', isEnabled: true, username: 'u123456', orderId: 77, createdAt: '2024-02-02T10:00:00Z' },
+    { domain: 'example.com', is_enabled: true, username: 'u123456', order_id: 77, created_at: '2024-02-02T10:00:00Z' },
     // Hosted but not in the registrar portfolio — should still be imported.
-    { domain: 'clientdomain.com', isEnabled: true, username: 'u999999', orderId: 78, createdAt: '2024-07-01T10:00:00Z' },
+    { domain: 'clientdomain.com', is_enabled: true, username: 'u999999', order_id: 78, created_at: '2024-07-01T10:00:00Z' },
   ],
   '/api/domains/v1/portfolio/example.com': {
     domain: 'example.com',
     status: 'active',
-    isLocked: true,
-    isPrivacyProtected: false,
-    nameServers: { ns1: 'ns1.dns-parking.com', ns2: 'ns2.dns-parking.com' },
-    registeredAt: '2024-02-01T10:00:00Z',
-    expiresAt: '2027-02-01T10:00:00Z',
+    is_locked: true,
+    is_privacy_protected: false,
+    name_servers: { ns1: 'ns1.dns-parking.com', ns2: 'ns2.dns-parking.com' },
+    registered_at: '2024-02-01T10:00:00Z',
+    expires_at: '2027-02-01T10:00:00Z',
   },
   // DNS is grouped by name/type with an inner records array.
   '/api/dns/v1/zones/example.com': [
-    { name: '@', type: 'A', ttl: 3600, records: [{ content: '203.0.113.10', isDisabled: false }] },
-    { name: 'www', type: 'CNAME', ttl: 1800, records: [{ content: 'example.com', isDisabled: false }] },
-    { name: '@', type: 'MX', ttl: 3600, records: [{ content: 'mx1.example.com', isDisabled: false }, { content: 'mx2.example.com', isDisabled: false }] },
+    { name: '@', type: 'A', ttl: 3600, records: [{ content: '203.0.113.10', is_disabled: false }] },
+    { name: 'www', type: 'CNAME', ttl: 1800, records: [{ content: 'example.com', is_disabled: false }] },
+    { name: '@', type: 'MX', ttl: 3600, records: [{ content: 'mx1.example.com', is_disabled: false }, { content: 'mx2.example.com', is_disabled: false }] },
   ],
   // More orders than fit on one page, with `ord_big` deliberately beyond the
   // first: an order is found by scanning this list, so a domain whose order
@@ -51,12 +51,12 @@ const FIXTURES = {
       { id: 'ord_big', status: 'active', seats: 60, domain: { domain: 'bigmail.example' } },
     ],
   },
-  // Usage is reported as storageUsed/storageQuota in KILOBYTES, per
+  // Usage is reported as storage_used/storage_quota in KILOBYTES, per
   // MailV1MailboxesMailboxUsageResource — not bytes.
   '/api/mail/v1/orders/ord_1/mailboxes': {
     data: [
-      { id: 'mb_1', address: 'info@example.com', status: 'active', usage: { storageQuota: 10485760, storageUsed: 1048576, messagesUsed: 42, messagesQuota: 10000 } },
-      { id: 'mb_2', address: 'support@example.com', status: 'active', usage: { storageQuota: 10485760, storageUsed: 0 } },
+      { id: 'mb_1', address: 'info@example.com', status: 'active', created_at: '2025-03-01T10:00:00Z', usage: { storage_quota: 10485760, storage_used: 1048576, messages_used: 42, messages_quota: 10000 } },
+      { id: 'mb_2', address: 'support@example.com', status: 'active', usage: { storage_quota: 10485760, storage_used: 0 } },
     ],
   },
   // 52 mailboxes on one domain — the case this was reported against.
@@ -65,7 +65,7 @@ const FIXTURES = {
       id: `mb_big_${i}`,
       address: `staff${String(i).padStart(2, '0')}@bigmail.example`,
       status: 'active',
-      usage: { storageQuota: 5242880, storageUsed: 0 },
+      usage: { storage_quota: 5242880, storage_used: 0 },
     })),
   },
   '/api/vps/v1/virtual-machines': [
@@ -257,4 +257,30 @@ test('listServers maps VPS instances', async () => {
   assert.equal(servers[0].hostname, 'srv1.example.com');
   assert.equal(servers[0].cpus, 2);
   assert.deepEqual(servers[0].ipv4, ['203.0.113.50']);
+});
+
+// --- Dates -------------------------------------------------------------------
+
+test('dates come from the fields the API actually sends', async () => {
+  const domains = await adapter.listDomains(TOKEN);
+  const com = domains.find((d) => d.name === 'example.com');
+  assert.equal(com.registeredAt?.toISOString(), '2024-02-01T10:00:00.000Z', 'from created_at');
+  assert.equal(com.expiresAt?.toISOString(), '2027-02-01T10:00:00.000Z', 'from expires_at');
+
+  const hosted = domains.find((d) => d.name === 'clientdomain.com');
+  assert.equal(hosted.registeredAt?.toISOString(), '2024-07-01T10:00:00.000Z', "a hosted site's created_at");
+
+  const details = await adapter.getDomainDetails(TOKEN, 'example.com');
+  assert.equal(details.isLocked, true);
+  assert.equal(details.isPrivacyProtected, false);
+  assert.deepEqual(details.nameservers, ['ns1.dns-parking.com', 'ns2.dns-parking.com']);
+  assert.equal(details.registeredAt?.toISOString(), '2024-02-01T10:00:00.000Z');
+});
+
+test('a mailbox carries the date it was created on the hosting account', async () => {
+  const mailboxes = await adapter.listEmailAccounts(TOKEN, 'example.com');
+  const info = mailboxes.find((m) => m.address === 'info@example.com');
+  assert.equal(info.createdAt?.toISOString(), '2025-03-01T10:00:00.000Z');
+  const support = mailboxes.find((m) => m.address === 'support@example.com');
+  assert.equal(support.createdAt, null, 'no date reported is no date, not today');
 });
