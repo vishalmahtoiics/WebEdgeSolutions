@@ -65,10 +65,21 @@ async function route() {
     return;
   }
 
-  fill(app, header(), homePage(), footer(), waFloat());
+  const home = homePage();
+  fill(app, header(), home.page, footer(), waFloat());
   // A #/…#plans style link should still land on the right block.
   if (name === 'plans' || name === 'domains') {
     document.getElementById(name)?.scrollIntoView({ block: 'start' });
+  }
+  // A shared search link, #/search/myshop.in, runs that search on arrival.
+  if (name === 'search' && param) {
+    let query = param;
+    try {
+      query = decodeURIComponent(param);
+    } catch {
+      // A mangled link searches for what it says.
+    }
+    home.searchDomain(query, { scroll: true });
   }
 }
 
@@ -172,6 +183,7 @@ function waFloat() {
 function homePage() {
   const c = state.config;
   const page = el('main', {});
+  const domains = domainsSection();
 
   appendAll(page, [
     el(
@@ -194,12 +206,14 @@ function homePage() {
         // stops being emphasis.
         headline(c.headline),
         el('p', { class: 'lede' }, c.subheadline),
-        el(
-          'div',
-          { class: 'hero-actions' },
-          el('a', { class: 'btn primary lg', href: '#/', onclick: () => scrollTo('plans') }, icon('server', 17), 'See hosting plans'),
-          el('a', { class: 'btn lg', href: '#/', onclick: () => scrollTo('domains') }, icon('globe', 17), 'Find a domain'),
-        ),
+        heroSearch(domains.search),
+        state.plans.length
+          ? el(
+              'div',
+              { class: 'hero-actions' },
+              el('a', { class: 'btn lg', href: '#/', onclick: () => scrollTo('plans') }, icon('server', 17), 'See hosting plans'),
+            )
+          : null,
         el(
           'div',
           { class: 'trust' },
@@ -217,11 +231,65 @@ function homePage() {
       ),
     ),
     plansSection(),
-    domainsSection(),
+    domains.node,
     helpSection(),
   ]);
 
-  return page;
+  return { page, searchDomain: domains.search };
+}
+
+/// The search box at the top of the page — the first thing most visitors
+/// came to do. It runs the same search as the Domains section below and
+/// shows the answer there, scrolling down to it, so there is one list of
+/// results rather than two that can disagree.
+function heroSearch(search) {
+  const input = el('input', {
+    type: 'search',
+    placeholder: 'Find your domain — e.g. yourbusiness.in',
+    autocomplete: 'off',
+    autocapitalize: 'off',
+    spellcheck: 'false',
+    enterkeyhint: 'search',
+    'aria-label': 'Domain name to search for',
+  });
+  const button = el('button', { class: 'btn primary', type: 'submit' }, icon('search', 17), el('span', {}, 'Search'));
+
+  const endings = state.tlds.length
+    ? state.tlds.slice(0, 5).map((t) =>
+        el('button', { type: 'button', class: 'ending', onclick: () => fillEnding(t.tld) }, `.${t.tld}`, el('span', { class: 'cost' }, t.register)),
+      )
+    : ['com', 'in', 'co.in', 'online'].map((t) =>
+        el('button', { type: 'button', class: 'ending', onclick: () => fillEnding(t) }, `.${t}`),
+      );
+
+  // Clicking an ending puts it on whatever has been typed, so "myshop" and
+  // a click on .in searches myshop.in.
+  function fillEnding(tld) {
+    const base = input.value.trim().toLowerCase().split('.')[0];
+    if (!base) {
+      input.focus();
+      return;
+    }
+    input.value = `${base}.${tld}`;
+    search(input.value, { scroll: true });
+  }
+
+  const form = el(
+    'form',
+    {
+      class: 'hero-search',
+      role: 'search',
+      onsubmit: (e) => {
+        e.preventDefault();
+        const value = input.value.trim();
+        if (!value) return input.focus();
+        search(value, { scroll: true });
+      },
+    },
+    el('div', { class: 'hero-search-box' }, el('span', { class: 'hero-search-ico' }, icon('globe', 20)), input, button),
+    el('div', { class: 'hero-endings' }, el('span', { class: 'muted' }, 'Popular:'), endings),
+  );
+  return form;
 }
 
 /// The headline, with its last few words carrying the gradient.
@@ -301,40 +369,123 @@ function planCard(plan) {
 // ---------------------------------------------------------------------------
 
 function domainsSection() {
-  if (!state.tlds.length) return null;
-
-  const input = el('input', { type: 'search', placeholder: 'yourbusiness', autocomplete: 'off', 'aria-label': 'Domain name to search for' });
-  const search = el('button', { class: 'btn primary' }, icon('search', 16), 'Search');
+  const input = el('input', {
+    type: 'search',
+    placeholder: 'yourbusiness or yourbusiness.in',
+    autocomplete: 'off',
+    autocapitalize: 'off',
+    spellcheck: 'false',
+    enterkeyhint: 'search',
+    'aria-label': 'Domain name to search for',
+  });
+  const button = el('button', { class: 'btn primary' }, icon('search', 16), 'Search');
+  const summary = el('div', { 'aria-live': 'polite' });
   const results = el('div', { class: 'tld-results' });
   const alertHost = el('div');
+  let latest = 0;
 
-  const run = submitHandler(search, alertHost, async () => {
-    const name = input.value.trim().toLowerCase();
-    if (!name) throw new Error('Type a name to search for.');
-
-    clear(results);
-    const data = await api('/domain-search', { method: 'POST', body: { name } });
-
-    search.disabled = false;
-    clear(search).append(icon('search', 16), 'Search');
-
-    if (!data.checked) {
-      results.append(
-        el(
-          'div',
-          { class: 'alert info' },
-          'We could not check availability just now, so these are prices only. Order anyway and we will confirm the name ' +
-            'before taking payment — or message us and we will check for you.',
-        ),
-      );
+  /// Runs a search for `raw`, from this box or from the one at the top.
+  async function search(raw, { scroll = false } = {}) {
+    const name = String(raw || '').trim();
+    input.value = name;
+    clear(alertHost);
+    if (!name) {
+      input.focus();
+      return;
     }
-    appendAll(results, data.results.map(tldRow));
-  });
 
-  search.onclick = run;
-  input.onkeydown = (e) => e.key === 'Enter' && run(e);
+    // A search that is overtaken by a newer one is dropped when it lands,
+    // so a slow answer cannot replace a quicker, later one.
+    const mine = ++latest;
+    button.disabled = true;
+    clear(button).append(el('span', { class: 'spinner' }), 'Checking…');
+    fill(summary, el('p', { class: 'muted search-status' }, `Checking ${name}…`));
+    fill(results, ...Array.from({ length: 4 }, () => el('div', { class: 'tld-row is-loading', 'aria-hidden': 'true' })));
+    if (scroll) document.getElementById('domains')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-  return el(
+    // The search goes in the address, so it can be shared or come back to,
+    // without a hashchange that would redraw the page under it.
+    try {
+      history.replaceState(null, '', `#/search/${encodeURIComponent(name)}`);
+    } catch {
+      // Not worth failing a search over.
+    }
+
+    try {
+      const data = await api('/domain-search', { method: 'POST', body: { name } });
+      if (mine !== latest) return;
+      drawResults(data);
+    } catch (err) {
+      if (mine !== latest) return;
+      clear(summary);
+      clear(results);
+      alertHost.append(errorAlert(err));
+    } finally {
+      if (mine === latest) {
+        button.disabled = false;
+        clear(button).append(icon('search', 16), 'Search');
+      }
+    }
+  }
+
+  function drawResults(data) {
+    const requested = data.results.find((r) => r.requested) || null;
+    const free = data.results.filter((r) => r.available === true);
+    const known = data.results.filter((r) => r.available !== null);
+
+    // The answer to the question actually asked, in one line, before the
+    // list. "Is myshop.in free?" deserves a yes or no about myshop.in; a bare
+    // "myshop" asked about every ending, so it gets a count across them —
+    // not a verdict on whichever ending happens to sort first.
+    let verdict = null;
+    if (requested && requested.available === true) {
+      verdict = el('div', { class: 'verdict ok' }, icon('check', 18), el('span', {}, el('strong', {}, requested.domain), ' is available.'));
+    } else if (requested && requested.available === false) {
+      verdict = el(
+        'div',
+        { class: 'verdict taken' },
+        el('span', {}, el('strong', {}, requested.domain), ' is already taken.'),
+        free.length ? el('span', { class: 'muted' }, ' These are free:') : null,
+      );
+    } else if (!requested && known.length) {
+      verdict = free.length
+        ? el(
+            'div',
+            { class: 'verdict ok' },
+            icon('check', 18),
+            el('span', {}, el('strong', {}, data.name), ` is free with ${free.length} ending${free.length === 1 ? '' : 's'}.`),
+          )
+        : el('div', { class: 'verdict taken' }, el('span', {}, el('strong', {}, data.name), ' is taken with every ending we checked. Try another name.'));
+    }
+
+    appendAll(clear(summary), [
+      verdict,
+      !data.checked
+        ? el(
+            'div',
+            { class: 'alert info' },
+            'We could not check availability just now. You can still ask for any of these and we will confirm the name ' +
+              'before taking payment.',
+          )
+        : null,
+    ]);
+
+    // Free first, then unknown, then taken, keeping the price list's order
+    // within each — except the name that was typed, which stays on top.
+    const rank = (r) => (r.requested ? -1 : r.available === true ? 0 : r.available === null ? 1 : 2);
+    const ordered = data.results.map((r, i) => [r, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([r]) => r);
+    fill(results, ...ordered.map(tldRow));
+  }
+
+  button.onclick = () => search(input.value);
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      search(input.value);
+    }
+  };
+
+  const node = el(
     'section',
     { class: 'section soft', id: 'domains' },
     el(
@@ -344,24 +495,59 @@ function domainsSection() {
         'div',
         { class: 'section-head' },
         el('h2', {}, 'Find a domain'),
-        el('p', {}, 'Type a name and we will price it across every ending we sell.'),
+        el(
+          'p',
+          {},
+          state.tlds.length
+            ? 'Type a name and we will check it across every ending we sell.'
+            : 'Type a name and we will check whether it is free.',
+        ),
       ),
       el(
         'div',
         { class: 'search-card' },
-        el('div', { class: 'search-row' }, input, search),
+        el('div', { class: 'search-row' }, input, button),
         alertHost,
+        summary,
         results,
-        el(
-          'div',
-          { class: 'tld-chips' },
-          state.tlds
-            .slice(0, 8)
-            .map((t) => el('span', { class: 'chip' }, el('span', { class: 'mono' }, `.${t.tld}`), el('span', { class: 'cost' }, t.register))),
-        ),
+        state.tlds.length
+          ? el(
+              'div',
+              { class: 'tld-chips' },
+              state.tlds
+                .slice(0, 8)
+                .map((t) => el('span', { class: 'chip' }, el('span', { class: 'mono' }, `.${t.tld}`), el('span', { class: 'cost' }, t.register))),
+            )
+          : null,
       ),
     ),
   );
+
+  return { node, search };
+}
+
+/// How to ask for a name that has no price on the list: WhatsApp if there is
+/// a number, email if there is an address, and nothing if there is neither —
+/// a button that goes nowhere is worse than none.
+function askLink(domain) {
+  const c = state.config;
+  const text = `Hi, I would like to register ${domain}. What would it cost?`;
+  const digits = String(c.whatsappNumber || '').replace(/\D/g, '');
+  if (digits) {
+    return el(
+      'a',
+      { class: 'btn sm primary', href: `https://wa.me/${digits}?text=${encodeURIComponent(text)}`, target: '_blank', rel: 'noopener' },
+      'Ask for price',
+    );
+  }
+  if (c.supportEmail) {
+    return el(
+      'a',
+      { class: 'btn sm primary', href: `mailto:${c.supportEmail}?subject=${encodeURIComponent(`Registering ${domain}`)}&body=${encodeURIComponent(text)}` },
+      'Ask for price',
+    );
+  }
+  return null;
 }
 
 function tldRow(row) {
@@ -381,19 +567,30 @@ function tldRow(row) {
       state.config,
     );
 
+  // What can be done about it. A taken name cannot be had; a priced one can
+  // be ordered here; one with no price yet is asked about, never given a
+  // number that nobody set.
+  let action;
+  if (row.available === false) action = el('span', { class: 'small muted' }, 'Try another name');
+  else if (row.priced) action = el('button', { class: 'btn sm primary', disabled: !state.config.isOpen, onclick: order }, 'Order');
+  else action = askLink(row.domain);
+
   return el(
     'div',
-    { class: 'tld-row' },
-    el('span', { class: 'name grow' }, row.domain),
+    { class: `tld-row ${row.requested ? 'is-requested' : ''} ${row.available === false ? 'is-taken' : ''}` },
+    el(
+      'span',
+      { class: 'name grow' },
+      row.domain,
+      row.restriction ? el('span', { class: 'tiny muted restriction' }, ` · ${row.restriction}`) : null,
+    ),
     row.renew ? el('span', { class: 'tiny muted' }, `renews at ${row.renew}`) : null,
-    el('span', { class: 'cost' }, row.register),
+    row.priced ? el('span', { class: 'cost' }, row.register) : el('span', { class: 'small muted' }, 'Price on request'),
     el('span', { class: `badge ${tone}` }, label),
     // "Unconfirmed" is still orderable: we check the name by hand before
     // asking for money, which is better than refusing a sale over a registry
     // that did not answer.
-    row.available === false
-      ? el('span', { class: 'small muted' }, 'Try another name')
-      : el('button', { class: 'btn sm primary', disabled: !state.config.isOpen, onclick: order }, 'Order'),
+    action,
   );
 }
 

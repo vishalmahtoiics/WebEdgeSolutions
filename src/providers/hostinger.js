@@ -554,10 +554,19 @@ export const hostingerAdapter = {
 
     const rows = unwrap(body);
     return rows
+      // Suggestions the registry adds on its own ("mydomain-online.com").
+      // Only asked for when with_alternatives is set, and never wanted here.
+      .filter((row) => row?.is_alternative !== true)
       .map((row) => {
-        const tld = row?.tld || row?.domain?.split('.').slice(1).join('.') || null;
+        // The documented answer is { domain, is_available, is_alternative,
+        // restriction } — snake case, and no separate tld field, so the
+        // ending comes from the domain itself. Reading `isAvailable` here,
+        // as this once did, found nothing on a real account: every name
+        // came back "unconfirmed" however the registry had answered.
+        const tld = row?.tld || (row?.domain?.startsWith(`${name}.`) ? row.domain.slice(name.length + 1) : null)
+          || row?.domain?.split('.').slice(1).join('.') || null;
         const full = row?.domain?.includes('.') ? row.domain : tld ? `${name}.${tld}` : row?.domain || name;
-        const free = row?.isAvailable ?? row?.available ?? null;
+        const free = row?.is_available ?? row?.isAvailable ?? row?.available ?? null;
         return {
           domain: String(full).toLowerCase(),
           tld,

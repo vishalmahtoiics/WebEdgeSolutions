@@ -19,8 +19,7 @@ import rateLimit from 'express-rate-limit';
 import { prisma } from '../db.js';
 import { validate } from '../middleware/validate.js';
 import { asyncHandler, badRequest, notFound } from '../lib/errors.js';
-import { getAdapter } from '../providers/index.js';
-import { loadProviderWithToken } from '../services/providerService.js';
+import { checkAvailability } from '../services/availabilityService.js';
 import { formatMinor } from '../lib/money.js';
 import { record } from '../services/notifier.js';
 import {
@@ -123,74 +122,104 @@ storeRouter.get(
 // ---------------------------------------------------------------------------
 
 const searchSchema = z.object({
-  name: z
-    .string()
-    .trim()
-    .toLowerCase()
-    .min(1, 'Enter a name to search for.')
-    .max(80)
-    .regex(/^[a-z0-9][a-z0-9.-]*$/, 'Use letters, numbers and hyphens.'),
+  name: z.string().trim().toLowerCase().min(1, 'Enter a name to search for.').max(253),
 });
 
-/// Prices a name against every ending on sale, and asks the registry which of
-/// them are free.
+/// Endings checked when none have been priced yet, so the search still
+/// answers the question people come with — is my name free? — on a site
+/// whose price list has not been filled in. Common endings for an Indian
+/// business first. No price is shown for these; see `priced` below.
+export const DEFAULT_ENDINGS = ['com', 'in', 'co.in', 'net', 'org', 'online', 'store', 'shop'];
+
+/// Most endings one search will check.
+const MAX_ENDINGS = 20;
+
+const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const ENDING = /^[a-z0-9-]{2,24}(?:\.[a-z0-9-]{2,24})?$/;
+
+/// What was typed, as a name and an optional ending.
 ///
-/// The registry answer is best-effort: when no provider can check, the prices
-/// still come back and the availability reads "unknown" rather than the search
-/// failing. A price list is useful on its own; a broken page is not.
+/// People paste all sorts: "My Shop", "myshop.in", "www.myshop.in",
+/// "https://myshop.in/about". Each of those means the same search, so they
+/// are reduced to it rather than refused.
+export function parseDomainQuery(raw) {
+  const cleaned = String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//, '')
+    .replace(/[/?#].*$/, '')
+    .replace(/^www\./, '')
+    .replace(/\s+/g, '')
+    .replace(/\.+$/, '');
+
+  const [label, ...rest] = cleaned.split('.');
+  if (!label) throw badRequest('Enter a name to search for.');
+  if (!LABEL.test(label)) {
+    throw badRequest(
+      label.length > 63
+        ? 'That name is too long — a domain name can be at most 63 characters before the dot.'
+        : 'Use only letters a–z, numbers and hyphens, and do not start or end with a hyphen.',
+    );
+  }
+  const ending = rest.join('.');
+  return { label, ending: ending && ENDING.test(ending) ? ending : null };
+}
+
+/// Checks a name against every ending on sale — and the one typed, if any —
+/// and says which are free.
+///
+/// Prices only ever come from the price list. An ending that is not on it is
+/// still checked, and comes back with no price and `priced: false`, which the
+/// page shows as "price on request" rather than inventing a number.
+///
+/// Availability is from the provider, then the registry itself; a name that
+/// neither can answer for reads "unknown" rather than failing the search.
 storeRouter.post(
   '/domain-search',
   searchLimiter,
   validate(searchSchema),
   asyncHandler(async (req, res) => {
-    const [label] = req.body.name.split('.');
-    if (!label) throw badRequest('Enter a name to search for.');
+    const { label, ending } = parseDomainQuery(req.body.name);
 
     const priced = await prisma.tldPrice.findMany({
       where: { isActive: true },
       orderBy: [{ sortOrder: 'asc' }, { registerMinor: 'asc' }],
     });
-    if (!priced.length) throw badRequest('No domain endings are on sale at the moment.');
+    const priceOf = new Map(priced.map((p) => [p.tld, p]));
 
-    // Availability, if any connected provider can answer.
-    const byDomain = new Map();
-    const providers = await prisma.provider.findMany({ where: { isActive: true }, orderBy: { createdAt: 'asc' } });
+    // The typed ending first, then the price list (or the common endings
+    // when there is no price list yet).
+    const endings = [...new Set([ending, ...(priced.length ? priced.map((p) => p.tld) : DEFAULT_ENDINGS)])]
+      .filter(Boolean)
+      .slice(0, MAX_ENDINGS);
 
-    for (const provider of providers) {
-      const adapter = getAdapter(provider.adapter);
-      if (!adapter?.capabilities?.domainSearch) continue;
-      try {
-        const { token } = await loadProviderWithToken(provider.id);
-        const results = await adapter.checkDomainAvailability(token, {
-          name: label,
-          tlds: priced.map((p) => p.tld),
-        });
-        for (const row of results) byDomain.set(row.domain, row);
-        break;
-      } catch {
-        // Try the next one; a price list without availability still helps.
-      }
-    }
+    const answers = await checkAvailability(label, endings);
 
     // A name already in the portal is ours, so it is certainly not free.
-    const names = priced.map((p) => `${label}.${p.tld}`);
+    const names = endings.map((t) => `${label}.${t}`);
     const taken = new Set(
       (await prisma.domain.findMany({ where: { name: { in: names } }, select: { name: true } })).map((d) => d.name),
     );
 
+    const results = endings.map((tld) => {
+      const domain = `${label}.${tld}`;
+      const price = priceOf.get(tld);
+      const answer = answers.get(domain) || {};
+      return {
+        domain,
+        ...(price ? presentTld(price) : { tld, register: null, registerMinor: null, renew: null, isPopular: false }),
+        priced: Boolean(price),
+        requested: tld === ending,
+        available: taken.has(domain) ? false : answer.available ?? null,
+        restriction: answer.restriction || null,
+      };
+    });
+
     res.json({
       name: label,
-      checked: byDomain.size > 0,
-      results: priced.map((row) => {
-        const domain = `${label}.${row.tld}`;
-        const found = byDomain.get(domain);
-        return {
-          domain,
-          ...presentTld(row),
-          available: taken.has(domain) ? false : found ? found.available : null,
-          restriction: found?.restriction || null,
-        };
-      }),
+      ending,
+      checked: results.some((r) => r.available !== null),
+      results,
     });
   }),
 );

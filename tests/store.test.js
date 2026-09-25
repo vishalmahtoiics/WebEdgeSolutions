@@ -11,6 +11,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import http from 'node:http';
 import { PrismaClient } from '@prisma/client';
 import { toMinor, formatMinor, toEditable } from '../src/lib/money.js';
 import { generateReference, upiLink, whatsappLink } from '../src/services/storeService.js';
@@ -22,10 +23,17 @@ const prisma = new PrismaClient();
 const stamp = Date.now();
 const PLAN_SLUG = `starter-${stamp}`;
 const TLD = `t${String(stamp).slice(-5)}`;   // a made-up ending, so no real price is disturbed
+const UNPRICED = `u${String(stamp).slice(-5)}`; // one with no price at all, whatever the database holds
 const userEmail = `store+${stamp}@example.com`;
 const userPassword = 'StoreUser@12345';
 
 let server;
+let registry;
+/// A stand-in for the registries' RDAP service: IANA's bootstrap file, and a
+/// registry that knows a few names. The search must never reach the real
+/// internet from a test.
+const registered = new Set([`taken-name.${UNPRICED}`, 'mybrand.com']);
+const registryHits = [];
 const admin = client();
 const anon = client();
 const member = client();
@@ -79,8 +87,30 @@ const customer = {
 };
 
 test.before(async () => {
+  registry = http.createServer((req, res) => {
+    const base = `http://127.0.0.1:${registry.address().port}/rdap/`;
+    if (req.url === '/bootstrap.json') {
+      res.setHeader('Content-Type', 'application/json');
+      return res.end(JSON.stringify({ services: [[['com', 'in', 'net', 'org', TLD, UNPRICED], [base]]] }));
+    }
+    const name = decodeURIComponent(req.url.replace(/^\/rdap\/domain\//, ''));
+    registryHits.push(name);
+    if (name.startsWith('registry-broken')) {
+      res.statusCode = 503;
+      return res.end();
+    }
+    res.statusCode = registered.has(name) ? 200 : 404;
+    res.setHeader('Content-Type', 'application/rdap+json');
+    res.end(JSON.stringify(registered.has(name) ? { objectClassName: 'domain', ldhName: name } : { errorCode: 404 }));
+  });
+  await new Promise((resolve) => registry.listen(0, '127.0.0.1', resolve));
+
   server = spawn(process.execPath, ['src/server.js'], {
-    env: { ...process.env, PORT: String(PORT) },
+    env: {
+      ...process.env,
+      PORT: String(PORT),
+      RDAP_BOOTSTRAP_URL: `http://127.0.0.1:${registry.address().port}/bootstrap.json`,
+    },
     stdio: 'ignore',
   });
   for (let i = 0; i < 80; i += 1) {
@@ -159,6 +189,7 @@ test.after(async () => {
     console.error('TEARDOWN:', err?.message);
   }
   server?.kill();
+  registry?.close();
 });
 
 // --- Money, on its own -----------------------------------------------------
@@ -280,10 +311,59 @@ test('a domain search prices the name across every ending', async () => {
 });
 
 test('a search for rubbish is refused', async () => {
-  for (const name of ['', 'has space', 'under_score']) {
+  for (const name of ['', 'under_score', '-leading', 'trailing-', 'a'.repeat(64), '!!!']) {
     const res = await anon('/api/store/domain-search', { method: 'POST', body: { name } });
     assert.equal(res.status, 400, `"${name}" should be refused`);
   }
+});
+
+test('the registry answers for each ending: taken, free, or unknown', async () => {
+  const { data } = await anon('/api/store/domain-search', { method: 'POST', body: { name: 'mybrand' } });
+  const at = (tld) => data.results.find((r) => r.tld === tld);
+  assert.equal(at(TLD).available, true, 'not in the registry, so free');
+  assert.equal(data.checked, true);
+});
+
+test('an ending that is typed is checked first, even without a price, and no price is made up', async () => {
+  const { status, data } = await anon('/api/store/domain-search', {
+    method: 'POST',
+    body: { name: `https://www.Taken-Name.${UNPRICED}/about` },
+  });
+  assert.equal(status, 200);
+  assert.equal(data.name, 'taken-name');
+  assert.equal(data.ending, UNPRICED);
+
+  const first = data.results[0];
+  assert.equal(first.domain, `taken-name.${UNPRICED}`);
+  assert.equal(first.requested, true);
+  assert.equal(first.available, false, 'the registry has a record for it');
+  assert.equal(first.priced, false);
+  assert.equal(first.register, null, 'no price list entry, so no price');
+
+  const priced = data.results.find((r) => r.tld === TLD);
+  assert.equal(priced.priced, true);
+  assert.equal(priced.register, '₹899');
+});
+
+test('a registry that errors is unknown, never available', async () => {
+  const { data } = await anon('/api/store/domain-search', { method: 'POST', body: { name: 'registry-broken.com' } });
+  assert.equal(data.results[0].domain, 'registry-broken.com');
+  assert.equal(data.results[0].available, null);
+});
+
+test('spaces are dropped rather than refused', async () => {
+  const { status, data } = await anon('/api/store/domain-search', { method: 'POST', body: { name: 'my shop.in' } });
+  assert.equal(status, 200);
+  assert.equal(data.results[0].domain, 'myshop.in');
+});
+
+test('an answer is remembered for a while, not asked of the registry on every search', async () => {
+  await anon('/api/store/domain-search', { method: 'POST', body: { name: 'cached-name.com' } });
+  const before = registryHits.filter((n) => n === 'cached-name.com').length;
+  await anon('/api/store/domain-search', { method: 'POST', body: { name: 'cached-name.com' } });
+  const after = registryHits.filter((n) => n === 'cached-name.com').length;
+  assert.equal(before, 1);
+  assert.equal(after, 1, 'the second search used the remembered answer');
 });
 
 // --- Placing an order ------------------------------------------------------

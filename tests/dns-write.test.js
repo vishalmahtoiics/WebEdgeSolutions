@@ -515,11 +515,17 @@ test('the user sees that their edits are live without being told by whom', async
 
 // --- Is a name free ---------------------------------------------------------
 
+// The answers below are in the shape of Hostinger's published OpenAPI spec
+// (Domains.V1.Availability.AvailabilityResource): snake case is_available,
+// is_alternative and restriction, with the ending only inside `domain`.
+// The stub once answered with a camel case isAvailable of its own
+// invention, which the adapter read, which a real account never sends.
+
 test('availability comes back per ending, exactly as the registry answered', async () => {
   availability = [
-    { domain: 'mysite.com', tld: 'com', isAvailable: false },
-    { domain: 'mysite.in', tld: 'in', isAvailable: true },
-    { domain: 'mysite.net', tld: 'net', isAvailable: true, restriction: 'premium' },
+    { domain: 'mysite.com', is_available: false },
+    { domain: 'mysite.in', is_available: true },
+    { domain: 'mysite.net', is_available: true, restriction: 'premium' },
   ];
 
   const res = await admin('/domains/availability', {
@@ -550,9 +556,9 @@ test('endings nobody asked about are dropped, whatever the registry volunteers',
   // means the flag above being ignored or renamed shows up as nothing at all,
   // rather than as endings appearing in somebody's search results.
   availability = [
-    { domain: 'mysite.com', tld: 'com', isAvailable: false },
-    { domain: 'mysite.xyz', tld: 'xyz', isAvailable: true },
-    { domain: 'mysite-online.com', tld: 'com', isAvailable: true },
+    { domain: 'mysite.com', is_available: false },
+    { domain: 'mysite.xyz', is_available: true },
+    { domain: 'mysite-online.com', is_available: true, is_alternative: true },
   ];
 
   const res = await admin('/domains/availability', {
@@ -569,13 +575,13 @@ test('endings nobody asked about are dropped, whatever the registry volunteers',
 });
 
 test('a registry that does not say is reported as unknown, never as available', async () => {
-  availability = [{ domain: 'unclear.com', tld: 'com' }];
+  availability = [{ domain: 'unclear.com', is_alternative: false }];
   const res = await admin('/domains/availability', { method: 'POST', body: { name: 'unclear' } });
   assert.equal(res.data.results[0].available, null);
 });
 
 test('a name already in the portal is flagged rather than called available', async () => {
-  availability = [{ domain: LIVE, tld: 'example', isAvailable: true }];
+  availability = [{ domain: LIVE, is_available: true }];
   const res = await admin('/domains/availability', {
     method: 'POST',
     body: { name: LIVE.split('.')[0], tlds: ['example'] },
@@ -584,7 +590,7 @@ test('a name already in the portal is flagged rather than called available', asy
 });
 
 test('an ending typed into the name is checked as well', async () => {
-  availability = [{ domain: 'typed.dev', tld: 'dev', isAvailable: true }];
+  availability = [{ domain: 'typed.dev', is_available: true }];
   const res = await admin('/domains/availability', { method: 'POST', body: { name: 'typed.dev' } });
   assert.equal(res.status, 200);
   assert.equal(res.data.name, 'typed');
